@@ -51,7 +51,7 @@ import time
 from urllib.parse import urlsplit
 
 BASE = 'https://vnpidbfkvfytudqvsjfm.supabase.co'
-VERSION = '0.1.0'
+VERSION = '0.1.1'
 # The publishable key identifies the project. It is not a secret: with no account it reads nothing.
 DEFAULT_KEY = 'sb_publishable_WY1XKEoEkXumGKcTTdrRag_SQtvl_AK'
 KEY_SHA256 = 'f30517481a7374eda124db8e06192032eb0f2dd2da15223c746911f7d4cedf6d'
@@ -159,6 +159,9 @@ def call(operation, **parameters):
     if status != 200:
         code = value.get('code') if isinstance(value, dict) else None
         raise Failure('request_refused', operation=operation, http_status=status, code=code)
+    if value is None:  # The database gives null for an ID that is absent or that the account cannot read.
+        raise Failure('not_found', operation=operation,
+                      hint='No record has this ID, or your account cannot read it.')
     return value
 
 
@@ -411,7 +414,10 @@ def cli():
         print(json.dumps(failure.report, ensure_ascii=False), file=sys.stderr)
         sys.exit(1)
     # The guide is text for a reader; each other command prints JSON.
-    print(value['guide'] if set(value) == {'guide'} else json.dumps(value, ensure_ascii=False, indent=2))
+    if isinstance(value, dict) and set(value) == {'guide'}:
+        print(value['guide'])
+    else:  # A result can be a list (history).
+        print(json.dumps(value, ensure_ascii=False, indent=2))
 
 
 if __name__ == '__main__':
