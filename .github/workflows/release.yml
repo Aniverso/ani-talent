@@ -1,0 +1,47 @@
+# Publishes the package to PyPI when a tag `v<VERSION>` is pushed.
+# PyPI accepts the upload through Trusted Publishing: it trusts this workflow file
+# in this repository and the environment `pypi`. There is no API token.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Make sure that the tag agrees with VERSION
+        run: |
+          version=$(python3 -c 'import ani_talent; print(ani_talent.VERSION)')
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "The tag is $GITHUB_REF_NAME, but ani_talent.VERSION is $version." >&2
+            exit 1
+          fi
+      - run: uv build
+      - name: Run the built wheel
+        run: uvx --from "$(ls dist/*.whl)" ani-talent version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ani-talent/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
