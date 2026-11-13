@@ -11,11 +11,12 @@ file also runs as `python3 ani_talent.py`.
   ani_talent.py status                    # The account of the session and its end time.
   ani_talent.py logout
 
-  ani_talent.py candidate ID              # One candidate.
+  ani_talent.py candidate ID              # One candidate. ID: an Ani ID (Ani000123) or a UUID.
   ani_talent.py summary ID                # Current title, company, city and function codes.
   ani_talent.py education ID              # Education rows and the city that the resume states.
   ani_talent.py contacts ID               # Contact values. Needs contact.read.
   ani_talent.py history ID                # The revisions of one candidate.
+  ani_talent.py file ID [--out DIR]       # Save the original resume file (PDF or Word). Needs file.read.
   ani_talent.py search [--text TEXT] [WORD...] [--city CODE] [--function CODE]
                        [--min-degree DEGREE] [--min-months N] [--include-unknown] [--limit N]
                                           # Candidates by meaning (--text), words and filters.
@@ -46,17 +47,21 @@ import http.client
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import time
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 BASE = 'https://vnpidbfkvfytudqvsjfm.supabase.co'
-VERSION = '0.1.1'
+VERSION = '0.2.0'
 # The publishable key identifies the project. It is not a secret: with no account it reads nothing.
 DEFAULT_KEY = 'sb_publishable_WY1XKEoEkXumGKcTTdrRag_SQtvl_AK'
 KEY_SHA256 = 'f30517481a7374eda124db8e06192032eb0f2dd2da15223c746911f7d4cedf6d'
 HOME = Path(os.environ.get('ANI_TALENT_HOME') or Path.home() / '.config' / 'ani-talent')
 REFRESH_BEFORE = 120  # Seconds before the end of a session at which a call gets a new one.
+ANI_ID = re.compile(r'Ani[0-9]{6,}\Z')
+UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z')
+FILE_LIMIT = 20971520
 
 
 class Failure(Exception):
@@ -90,31 +95,34 @@ def key():
 _connection = None  # One connection for the process: a new one costs about a second.
 
 
-def request(path, body, token=None, schema=None):
+def exchange(method, path, payload, headers, limit=8_000_001):
     global _connection
     target = urlsplit(BASE)
-    headers = {'apikey': key(), 'Content-Type': 'application/json', 'Cache-Control': 'no-store'}
-    if token:
-        headers['Authorization'] = 'Bearer ' + token
-    if schema:
-        headers['Content-Profile'] = headers['Accept-Profile'] = schema
     kind = http.client.HTTPSConnection if target.scheme == 'https' else http.client.HTTPConnection
-    payload = json.dumps(body).encode()
     while True:
         reused = _connection is not None
         if not reused:
             _connection = kind(target.hostname, target.port, timeout=30)
         try:
-            _connection.request('POST', path, payload, headers)
+            _connection.request(method, path, payload, headers)
             response = _connection.getresponse()
-            raw = response.read(8_000_001)
-            break
+            raw = response.read(limit)
+            return response, raw
         except (OSError, http.client.HTTPException):
             _connection.close()
             _connection = None
             # The server closes an idle connection. Only then is a second try safe.
             if not reused:
                 raise Failure('network_failed') from None
+
+
+def request(path, body, token=None, schema=None):
+    headers = {'apikey': key(), 'Content-Type': 'application/json', 'Cache-Control': 'no-store'}
+    if token:
+        headers['Authorization'] = 'Bearer ' + token
+    if schema:
+        headers['Content-Profile'] = headers['Accept-Profile'] = schema
+    response, raw = exchange('POST', path, json.dumps(body).encode(), headers)
     try:
         value = json.loads(raw) if raw else None
     except ValueError:
@@ -176,12 +184,88 @@ def search(text, **body):
     return value
 
 
+def resolve(value):
+    """The UUID of a candidate ID: a UUID stays; an Ani ID is looked up."""
+    value = str(value).strip()
+    if UUID.fullmatch(value.lower()):
+        return value.lower()
+    if not ANI_ID.fullmatch(value):
+        raise Failure('invalid_candidate_id', hint='Use an Ani ID such as Ani000123, or a UUID.')
+    found = [item['candidate_id'] for item in call('ani_ids', p_ids=[value]) if item.get('ani_id') == value]
+    if not found:
+        raise Failure('candidate_not_found', id=value)
+    return found[0]
+
+
+def with_ani_ids(value, *ids):
+    """Add `ani_id` next to each `candidate_id` of a result. The result stays as it is on a failure."""
+    found, stack = set(ids), [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            if isinstance(item.get('candidate_id'), str) and UUID.fullmatch(item['candidate_id']):
+                found.add(item['candidate_id'])
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    if not found:
+        return value
+    try:
+        names = {}
+        found = sorted(found)
+        for start in range(0, len(found), 200):
+            names.update({item['candidate_id']: item['ani_id'] for item in call('ani_ids', p_ids=found[start:start + 200])})
+    except Failure:
+        return value
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            if item.get('candidate_id') in names:
+                item['ani_id'] = names[item['candidate_id']]
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    if isinstance(value, dict) and len(ids) == 1 and ids[0] in names:
+        value.setdefault('ani_id', names[ids[0]])
+    return value
+
+
+def save_file(candidate, directory):
+    """Save the newest original file of a candidate. The download is checked against its hash."""
+    try:
+        meta = call('candidate_file_get', p_candidate_id=candidate)
+    except Failure as failure:
+        if failure.report['error'] != 'not_found':
+            raise
+        raise Failure('no_file', hint='This candidate has no original file, or you cannot read the candidate.') from None
+    if (not isinstance(meta, dict) or not re.fullmatch(r'original/[0-9a-f/-]+\.(pdf|docx|doc)', meta.get('object_key', ''))
+            or not re.fullmatch(r'Ani[0-9]{6,}\.(pdf|docx|doc)', meta.get('file_name', ''))):
+        raise Failure('response_rejected')
+    response, raw = exchange('GET', '/storage/v1/object/authenticated/ani-talent-originals/'
+                             + quote(meta['object_key'], safe='/'), None,
+                             {'apikey': key(), 'Authorization': 'Bearer ' + token(), 'Cache-Control': 'no-store'},
+                             FILE_LIMIT + 1)
+    if response.status != 200:
+        raise Failure('download_refused', http_status=response.status)
+    if len(raw) != meta['bytes'] or hashlib.sha256(raw).hexdigest() != meta['sha256']:
+        raise Failure('download_damaged')
+    folder = Path(directory or '.').expanduser()
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / meta['file_name']
+    path.touch(mode=0o600, exist_ok=True)
+    path.chmod(0o600)
+    path.write_bytes(raw)
+    return {'candidate_id': candidate, 'ani_id': meta['ani_id'], 'path': str(path.resolve()),
+            'bytes': meta['bytes'], 'sha256': meta['sha256']}
+
+
 def filters(arguments, names):
     chosen = {name: getattr(arguments, name) for name in names if getattr(arguments, name) is not None}
     return chosen
 
 
-ID = {'type': 'string', 'description': 'UUID'}
+ID = {'type': 'string', 'description': 'An Ani ID (Ani000123) or a UUID'}
 LIMIT = {'type': 'integer', 'minimum': 1, 'maximum': 50}
 CODE = {'type': 'string', 'description': 'A dictionary code from the tool tags, for example city.shanghai'}
 # MCP tool: (description, properties, required, positional arguments, options).
@@ -199,6 +283,10 @@ TOOLS = {
     'contacts': ('Contact values of one candidate. Counts for the daily contact limit.', {'id': ID}, ['id'],
                  ['id'], []),
     'history': ('The revisions of one candidate.', {'id': ID}, ['id'], ['id'], []),
+    'file': ('Save the original resume file (PDF or Word) of one candidate to a folder on this computer, as '
+             '<Ani ID>.pdf. Needs file.read (role pm). Counts for the daily file limit.',
+             {'id': ID, 'out': {'type': 'string', 'description': 'Folder. Default: the current folder.'}},
+             ['id'], ['id'], ['out']),
     'search': ('Candidates by meaning, words and filters, best first: a list of summaries with no name. text: one '
                'sentence that says which person you look for (search by meaning). terms: 8 words at most, a '
                'candidate with one of them is a hit (skill, company, title, school). Use text and terms together '
@@ -300,6 +388,9 @@ def main(argv=None):
     commands.add_parser('logout')
     for name in ('candidate', 'summary', 'education', 'contacts', 'history', 'job'):
         commands.add_parser(name).add_argument('id')
+    command = commands.add_parser('file')
+    command.add_argument('id')
+    command.add_argument('--out')
     command = commands.add_parser('search')
     command.add_argument('terms', nargs='*')
     command.add_argument('--text')
@@ -369,37 +460,35 @@ def main(argv=None):
             (HOME / 'session.json').unlink(missing_ok=True)
         return {'status': 'signed_out'}
 
-    if arguments.command == 'candidate':
-        return call('candidate_get', p_candidate_id=arguments.id)
-    if arguments.command == 'summary':
-        return call('candidate_summary', p_candidate_id=arguments.id)
-    if arguments.command == 'education':
-        return call('candidate_derived_get', p_candidate_id=arguments.id)
-    if arguments.command == 'contacts':
-        return call('contacts_get', p_candidate_id=arguments.id)
-    if arguments.command == 'history':
-        return call('candidate_history', p_candidate_id=arguments.id)
+    one = {'candidate': 'candidate_get', 'summary': 'candidate_summary', 'education': 'candidate_derived_get',
+           'contacts': 'contacts_get', 'history': 'candidate_history'}
+    if arguments.command in one:
+        candidate = resolve(arguments.id)
+        return with_ani_ids(call(one[arguments.command], p_candidate_id=candidate), candidate)
+    if arguments.command == 'file':
+        return save_file(resolve(arguments.id), arguments.out)
     if arguments.command == 'search' and arguments.text:
-        return search(arguments.text, words=' '.join(arguments.terms) or None, limit=arguments.limit,
-                      filters=filters(arguments, ('city', 'function', 'min_degree', 'min_months',
-                                                  'include_unknown')))
+        return with_ani_ids(search(arguments.text, words=' '.join(arguments.terms) or None, limit=arguments.limit,
+                                   filters=filters(arguments, ('city', 'function', 'min_degree', 'min_months',
+                                                               'include_unknown'))))
     if arguments.command == 'jobs' and arguments.text:
         return search(arguments.text, target='jobs', limit=arguments.limit,
                       filters=filters(arguments, ('city', 'function')))
     if arguments.command == 'search':
-        return call('candidate_find', p_text=' '.join(arguments.terms) or None, p_limit=arguments.limit,
-                    p_filters=filters(arguments, ('city', 'function', 'min_degree', 'min_months',
-                                                  'include_unknown')))
+        return with_ani_ids(call('candidate_find', p_text=' '.join(arguments.terms) or None, p_limit=arguments.limit,
+                                 p_filters=filters(arguments, ('city', 'function', 'min_degree', 'min_months',
+                                                               'include_unknown'))))
     if arguments.command == 'jobs':
         return call('job_list', p_query=arguments.query, p_limit=arguments.limit, p_cursor=arguments.cursor)
     if arguments.command == 'job':
         return call('job_get', p_job_id=arguments.id)
     if arguments.command == 'match-job':
-        return call('job_match_candidates', p_job_id=arguments.id, p_limit=arguments.limit,
-                    p_filters=filters(arguments, ('city', 'function', 'min_months')))
+        return with_ani_ids(call('job_match_candidates', p_job_id=arguments.id, p_limit=arguments.limit,
+                                 p_filters=filters(arguments, ('city', 'function', 'min_months'))))
     if arguments.command == 'match-candidate':
-        return call('candidate_match_jobs', p_candidate_id=arguments.id, p_limit=arguments.limit,
-                    p_filters=filters(arguments, ('city', 'function')))
+        candidate = resolve(arguments.id)
+        return with_ani_ids(call('candidate_match_jobs', p_candidate_id=candidate, p_limit=arguments.limit,
+                                 p_filters=filters(arguments, ('city', 'function'))), candidate)
     return call('dictionary_list', p_kind=arguments.kind)
 
 
