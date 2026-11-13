@@ -32,7 +32,13 @@ file also runs as `python3 ani_talent.py`.
                                           # signals and jobs. ID: a company code (AniC59310427) or a UUID.
   ani_talent.py companies TEXT [--limit N]     # Companies whose name or alias has the text.
   ani_talent.py signals ID [--kind KIND] [--limit N] [--before JSON]   # The signals of a company.
-  ani_talent.py company-add --source SOURCE --key KEY --name NAME [--alias NAME ...]
+  ani_talent.py people ID [--current | --past] [--limit N]   # Candidates with an employment at a company.
+  ani_talent.py employers CANDIDATE_ID    # The employments of a candidate, with the company of each.
+  ani_talent.py company-add --source SOURCE --key KEY --name NAME [--alias NAME ...] [--new]
+                                          # Gives the existing company if one has the name; --new makes a second.
+  ani_talent.py alias-candidates ID [--limit N]   # Employer texts that are possibly this company.
+  ani_talent.py company-duplicates        # Companies that share a name.
+  ani_talent.py company-merge FROM_ID INTO_ID --reason TEXT    # Needs company.merge.
   ani_talent.py section-set ID KIND (--text TEXT | --file PATH) [--source URL ...] [--as-of DATE]
   ani_talent.py signal-add ID --kind KIND --title TITLE [--date DATE] [--summary TEXT] [--url URL]
                               [--source-name NAME] [--sentiment -1|0|1]
@@ -64,7 +70,7 @@ import time
 from urllib.parse import quote, urlsplit
 
 BASE = 'https://vnpidbfkvfytudqvsjfm.supabase.co'
-VERSION = '0.3.0'
+VERSION = '0.4.0'
 # The publishable key identifies the project. It is not a secret: with no account it reads nothing.
 DEFAULT_KEY = 'sb_publishable_WY1XKEoEkXumGKcTTdrRag_SQtvl_AK'
 KEY_SHA256 = 'f30517481a7374eda124db8e06192032eb0f2dd2da15223c746911f7d4cedf6d'
@@ -388,11 +394,31 @@ TOOLS = {
                             'limit': {'type': 'integer', 'minimum': 1, 'maximum': 100},
                             'before': {'type': 'string', 'description': 'JSON of `next`'}}, ['id'], ['id'],
                 ['kind', 'limit', 'before']),
+    'people': ('The candidates with an employment at one company (the company text of the employment is a name '
+               'or an alias of the company): current first. A list of summaries with no name. You get only the '
+               'candidates that you can read. Set current true for current employees only, false for past.',
+               {'id': COMPANY, 'current': {'type': 'boolean'}, 'limit': LIMIT}, ['id'], ['id'], ['limit']),
+    'employers': ('The employments of one candidate, each with the code and the name of its company if the '
+                  'company has a record.', {'id': ID}, ['id'], ['id'], []),
     'company-add': ('Make a company, or change its name and aliases. source and key are the identity of the '
-                    'company in your source; the same pair again gives the same company. Needs company.change.',
+                    'company in your source; the same pair again gives the same company. If another company '
+                    'has the name or an alias, the result is that company with `existing` true and nothing is '
+                    'made: write to that company. Set new true only when you are sure that it is a different '
+                    'company with the same name. Needs company.change.',
                     {'source': {'type': 'string'}, 'key': {'type': 'string'}, 'name': {'type': 'string'},
-                     'alias': {'type': 'array', 'items': {'type': 'string'}, 'maxItems': 50}},
-                    ['source', 'key', 'name'], [], ['source', 'key', 'name', 'alias']),
+                     'alias': {'type': 'array', 'items': {'type': 'string'}, 'maxItems': 48},
+                     'new': {'type': 'boolean'}},
+                    ['source', 'key', 'name'], [], ['source', 'key', 'name', 'alias', 'new']),
+    'alias-candidates': ('Employer texts of candidates that have a name of this company in them and belong to '
+                         'no company. Decide for each text if it is this company; if it is, add it as an alias '
+                         'with company-add (same source and key, with all aliases). Needs company.change.',
+                         {'id': COMPANY, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 100}}, ['id'],
+                         ['id'], ['limit']),
+    'company-duplicates': ('Groups of companies that share a name. Needs company.change.', {}, [], [], []),
+    'company-merge': ('Merge one company into another: sections, signals and names go to `into`, and the code '
+                      'of `from` gives `into` after that. It cannot be undone. Needs company.merge.',
+                      {'from_id': COMPANY, 'into_id': COMPANY, 'reason': {'type': 'string', 'maxLength': 500}},
+                      ['from_id', 'into_id', 'reason'], ['from_id', 'into_id'], ['reason']),
     'section-set': ('Write a new version of one profile section of a company. The same content again changes '
                     'nothing. Give the sources. Needs company.change.',
                     {'id': COMPANY, 'kind': {'type': 'string', 'enum': list(SECTIONS)},
@@ -427,6 +453,8 @@ def tool_call(name, given):
     for key in positional:
         value = given.get(key, [])
         argv += [str(item) for item in value] if isinstance(value, list) else [str(value)]
+    if name == 'people' and isinstance(given.get('current'), bool):
+        argv.append('--current' if given['current'] else '--past')
     for option in options:
         value = given.get(option.replace('-', '_'))
         if value is True:
@@ -534,6 +562,22 @@ def main(argv=None):
     command.add_argument('--key', required=True)
     command.add_argument('--name', required=True)
     command.add_argument('--alias', action='append')
+    command.add_argument('--new', action='store_true')
+    command = commands.add_parser('people')
+    command.add_argument('id')
+    group = command.add_mutually_exclusive_group()
+    group.add_argument('--current', dest='current', action='store_const', const=True, default=None)
+    group.add_argument('--past', dest='current', action='store_const', const=False)
+    command.add_argument('--limit', type=int, default=20)
+    commands.add_parser('employers').add_argument('id')
+    command = commands.add_parser('alias-candidates')
+    command.add_argument('id')
+    command.add_argument('--limit', type=int, default=30)
+    commands.add_parser('company-duplicates')
+    command = commands.add_parser('company-merge')
+    command.add_argument('from_id')
+    command.add_argument('into_id')
+    command.add_argument('--reason', required=True)
     command = commands.add_parser('section-set')
     command.add_argument('id')
     command.add_argument('kind', choices=SECTIONS)
@@ -637,7 +681,20 @@ def main(argv=None):
                     p_limit=arguments.limit, p_before=arguments.before)
     if arguments.command == 'company-add':
         return call('company_put', p_source=arguments.source, p_source_key=arguments.key, p_name=arguments.name,
-                    p_aliases=arguments.alias)
+                    p_aliases=arguments.alias, p_new=arguments.new or None)
+    if arguments.command == 'people':
+        return call('company_people', p_id=company_id(arguments.id), p_current=arguments.current,
+                    p_limit=arguments.limit)
+    if arguments.command == 'employers':
+        candidate = resolve(arguments.id)
+        return with_ani_ids(call('candidate_companies', p_candidate_id=candidate), candidate)
+    if arguments.command == 'alias-candidates':
+        return call('company_alias_candidates', p_id=company_id(arguments.id), p_limit=arguments.limit)
+    if arguments.command == 'company-duplicates':
+        return call('company_duplicates')
+    if arguments.command == 'company-merge':
+        return call('company_merge', p_from=company_id(arguments.from_id), p_into=company_id(arguments.into_id),
+                    p_reason=arguments.reason)
     if arguments.command == 'section-set':
         if (arguments.text is None) == (arguments.file is None):
             raise Failure('invalid_arguments', hint='Give --text or --file, and not the two.')
