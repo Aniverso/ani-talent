@@ -38,6 +38,8 @@ file also runs as `python3 ani_talent.py`.
                                           # signals and jobs. ID: a company code (AniC59310427) or a UUID.
   ani_talent.py companies TEXT [--limit N]     # Companies whose name or alias has the text.
   ani_talent.py signals ID [--kind KIND] [--limit N] [--before JSON]   # The signals of a company.
+  ani_talent.py signal-search TEXT [--kind KIND] [--since DATE] [--company ID] [--limit N]
+                                          # Signals of all companies by meaning, best first.
   ani_talent.py people ID [--current | --past] [--limit N]   # Candidates with an employment at a company.
   ani_talent.py employers CANDIDATE_ID    # The employments of a candidate, with the company of each.
   ani_talent.py company-add --source SOURCE --key KEY --name NAME [--alias NAME ...] [--new]
@@ -78,7 +80,7 @@ import time
 from urllib.parse import quote, urlsplit
 
 BASE = 'https://vnpidbfkvfytudqvsjfm.supabase.co'
-VERSION = '0.7.0'
+VERSION = '0.8.0'
 # The publishable key identifies the project. It is not a secret: with no account it reads nothing.
 DEFAULT_KEY = 'sb_publishable_WY1XKEoEkXumGKcTTdrRag_SQtvl_AK'
 KEY_SHA256 = 'f30517481a7374eda124db8e06192032eb0f2dd2da15223c746911f7d4cedf6d'
@@ -467,6 +469,12 @@ TOOLS = {
                             'limit': {'type': 'integer', 'minimum': 1, 'maximum': 100},
                             'before': {'type': 'string', 'description': 'JSON of `next`'}}, ['id'], ['id'],
                 ['kind', 'limit', 'before']),
+    'signal-search': ('Signals (news, events and the TTC recommendation history) of all companies, by meaning, '
+                      'best first, with the company of each. A list to read, not a decision.',
+                      {'text': {'type': 'string', 'minLength': 2, 'maxLength': 400},
+                       'kind': {'type': 'string', 'enum': list(SIGNALS)},
+                       'since': {'type': 'string', 'description': 'YYYY-MM-DD'}, 'company': COMPANY,
+                       'limit': LIMIT}, ['text'], ['text'], ['kind', 'since', 'company', 'limit']),
     'people': ('The candidates with an employment at one company (the company text of the employment is a name '
                'or an alias of the company): current first. A list of summaries with no name. You get only the '
                'candidates that you can read. Set current true for current employees only, false for past.',
@@ -520,7 +528,7 @@ NEEDS = {
     **dict.fromkeys(('candidate', 'candidates', 'text', 'summary', 'education', 'history', 'search'), 'profile.read'),
     'contacts': 'contact.read', 'file': 'file.read', 'jobs': 'job.read', 'job': 'job.read',
     'match-job': 'match.run', 'match-candidate': 'match.run',
-    **dict.fromkeys(('company', 'companies', 'signals', 'people', 'employers'), 'company.read'),
+    **dict.fromkeys(('company', 'companies', 'signals', 'signal-search', 'people', 'employers'), 'company.read'),
     **dict.fromkeys(('company-add', 'alias-candidates', 'company-duplicates', 'section-set', 'signal-add',
                      'signal-retract'), 'company.change'),
     'company-merge': 'company.merge',
@@ -667,6 +675,12 @@ def main(argv=None):
     command.add_argument('--kind', choices=SIGNALS)
     command.add_argument('--limit', type=int, default=20)
     command.add_argument('--before', type=json.loads)
+    command = commands.add_parser('signal-search')
+    command.add_argument('text')
+    command.add_argument('--kind', choices=SIGNALS)
+    command.add_argument('--since')
+    command.add_argument('--company')
+    command.add_argument('--limit', type=int, default=20)
     command = commands.add_parser('company-add')
     command.add_argument('--source', required=True)
     command.add_argument('--key', required=True)
@@ -795,6 +809,11 @@ def main(argv=None):
     if arguments.command == 'signals':
         return call('company_signals', p_id=company_id(arguments.id), p_kind=arguments.kind,
                     p_limit=arguments.limit, p_before=arguments.before)
+    if arguments.command == 'signal-search':
+        chosen = {'kind': arguments.kind, 'since': arguments.since,
+                  'company': company_id(arguments.company) if arguments.company else None}
+        return search(arguments.text, target='signals', limit=arguments.limit,
+                      filters={key: value for key, value in chosen.items() if value is not None})
     if arguments.command == 'company-add':
         return call('company_put', p_source=arguments.source, p_source_key=arguments.key, p_name=arguments.name,
                     p_aliases=arguments.alias, p_new=arguments.new or None)
