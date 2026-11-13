@@ -59,7 +59,8 @@ The tool `guide` tells the Agent how to use them. For an Agent that reads skill 
   another person or Agent: each one has its own account.
 - The publishable key in the source is not a secret. It identifies the project; the
   database gives data only to a signed-in account with a role.
-- The tool has no export and no write command.
+- The tool has no export. It does not write candidates, contacts or jobs. The company
+  commands write company records; they need the role `company_agent`.
 
 ## Release
 
