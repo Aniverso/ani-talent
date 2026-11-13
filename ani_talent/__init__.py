@@ -23,10 +23,21 @@ file also runs as `python3 ani_talent.py`.
                                           # A list of summaries.
   ani_talent.py jobs [--query TEXT] [--limit N] [--cursor JSON]
   ani_talent.py jobs --text TEXT [--limit N] [--city CODE] [--function CODE]   # Jobs by meaning.
-  ani_talent.py job ID
+  ani_talent.py job ID                    # ID: a job code (AniJ48203715) or a UUID.
   ani_talent.py match-job JOB_ID [--limit N] [--city CODE] [--function CODE] [--min-months N]
   ani_talent.py match-candidate CANDIDATE_ID [--limit N] [--city CODE] [--function CODE]
   ani_talent.py tags [--kind city|function]    # The codes for --city and --function.
+
+  ani_talent.py company ID                # One company record: names, profile sections, newest
+                                          # signals and jobs. ID: a company code (AniC59310427) or a UUID.
+  ani_talent.py companies TEXT [--limit N]     # Companies whose name or alias has the text.
+  ani_talent.py signals ID [--kind KIND] [--limit N] [--before JSON]   # The signals of a company.
+  ani_talent.py company-add --source SOURCE --key KEY --name NAME [--alias NAME ...]
+  ani_talent.py section-set ID KIND (--text TEXT | --file PATH) [--source URL ...] [--as-of DATE]
+  ani_talent.py signal-add ID --kind KIND --title TITLE [--date DATE] [--summary TEXT] [--url URL]
+                              [--source-name NAME] [--sentiment -1|0|1]
+  ani_talent.py signal-retract SIGNAL_ID --reason TEXT
+                                          # The four write commands need company.change.
 
   ani_talent.py mcp                       # A Model Context Protocol server on stdin and stdout.
 
@@ -53,13 +64,18 @@ import time
 from urllib.parse import quote, urlsplit
 
 BASE = 'https://vnpidbfkvfytudqvsjfm.supabase.co'
-VERSION = '0.2.0'
+VERSION = '0.3.0'
 # The publishable key identifies the project. It is not a secret: with no account it reads nothing.
 DEFAULT_KEY = 'sb_publishable_WY1XKEoEkXumGKcTTdrRag_SQtvl_AK'
 KEY_SHA256 = 'f30517481a7374eda124db8e06192032eb0f2dd2da15223c746911f7d4cedf6d'
 HOME = Path(os.environ.get('ANI_TALENT_HOME') or Path.home() / '.config' / 'ani-talent')
 REFRESH_BEFORE = 120  # Seconds before the end of a session at which a call gets a new one.
 ANI_ID = re.compile(r'Ani[0-9]{6,}\Z')
+JOB_ID = re.compile(r'AniJ[0-9]{8}\Z')
+COMPANY_ID = re.compile(r'AniC[0-9]{8}\Z')
+SECTIONS = ('overview', 'business', 'funding', 'finance', 'organization', 'other')
+SIGNALS = ('funding', 'layoff', 'organization', 'product', 'business', 'legal', 'people', 'hiring', 'negative',
+           'other')
 UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z')
 FILE_LIMIT = 20971520
 
@@ -231,6 +247,55 @@ def with_ani_ids(value, *ids):
     return value
 
 
+def resolve_job(value):
+    """The UUID of a job ID: a UUID stays; a job code is looked up."""
+    value = str(value).strip()
+    if UUID.fullmatch(value.lower()):
+        return value.lower()
+    if not JOB_ID.fullmatch(value):
+        raise Failure('invalid_job_id', hint='Use a job code such as AniJ48203715, or a UUID.')
+    found = [item['job_id'] for item in call('job_ids', p_ids=[value]) if item.get('ani_id') == value]
+    if not found:
+        raise Failure('job_not_found', id=value)
+    return found[0]
+
+
+def company_id(value):
+    value = str(value).strip()
+    if not COMPANY_ID.fullmatch(value) and not UUID.fullmatch(value.lower()):
+        raise Failure('invalid_company_id', hint='Use a company code such as AniC59310427, or a UUID.')
+    return value if COMPANY_ID.fullmatch(value) else value.lower()
+
+
+def with_job_ids(value):
+    """Add the job code and the company code next to each job of a result. A job is a
+    dict with `job_id`, or a job record (`id` with `title`). The result stays as it is on a failure."""
+    jobs, stack = [], [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            number = item.get('job_id') if 'job_id' in item else item.get('id') if 'title' in item else None
+            if isinstance(number, str) and UUID.fullmatch(number):
+                jobs.append((item, number))
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    if not jobs:
+        return value
+    try:
+        names, found = {}, sorted({number for _, number in jobs})
+        for start in range(0, len(found), 200):
+            names.update({item['job_id']: item for item in call('job_ids', p_ids=found[start:start + 200])})
+    except Failure:
+        return value
+    for item, number in jobs:
+        if number in names:
+            item['job_ani_id' if 'job_id' in item else 'ani_id'] = names[number]['ani_id']
+            if names[number].get('company_ani_id'):
+                item['company_ani_id'] = names[number]['company_ani_id']
+    return value
+
+
 def save_file(candidate, directory):
     """Save the newest original file of a candidate. The download is checked against its hash."""
     try:
@@ -266,6 +331,8 @@ def filters(arguments, names):
 
 
 ID = {'type': 'string', 'description': 'An Ani ID (Ani000123) or a UUID'}
+JOB = {'type': 'string', 'description': 'A job code (AniJ48203715) or a UUID'}
+COMPANY = {'type': 'string', 'description': 'A company code (AniC59310427) or a UUID'}
 LIMIT = {'type': 'integer', 'minimum': 1, 'maximum': 50}
 CODE = {'type': 'string', 'description': 'A dictionary code from the tool tags, for example city.shanghai'}
 # MCP tool: (description, properties, required, positional arguments, options).
@@ -301,9 +368,9 @@ TOOLS = {
     'jobs': ('Jobs. With text: by meaning, best first. With query or nothing: newest first.',
              {'text': {'type': 'string', 'maxLength': 400}, 'query': {'type': 'string'}, 'city': CODE,
               'function': CODE, 'limit': LIMIT}, [], [], ['text', 'query', 'city', 'function', 'limit']),
-    'job': ('One job.', {'id': ID}, ['id'], ['id'], []),
+    'job': ('One job, with its job code and the code of its company.', {'id': JOB}, ['id'], ['id'], []),
     'match-job': ('The candidates for one job, by meaning, best first. A list to examine, not a decision.',
-                  {'id': ID, 'limit': LIMIT, 'city': CODE, 'function': CODE,
+                  {'id': JOB, 'limit': LIMIT, 'city': CODE, 'function': CODE,
                    'min_months': {'type': 'integer', 'minimum': 0}}, ['id'], ['id'],
                   ['limit', 'city', 'function', 'min-months']),
     'match-candidate': ('The jobs for one candidate, by meaning, best first.',
@@ -311,6 +378,39 @@ TOOLS = {
                         ['limit', 'city', 'function']),
     'guide': ('How to use these tools: the search method, the roles, the limits and the rules. '
               'Read it one time before the first search.', {}, [], [], []),
+    'company': ('The record of one company: names, the current profile sections (overview, business, funding, '
+                'finance, organization, other), the 10 newest signals and its jobs. Read it before you work on '
+                'a job of that company.', {'id': COMPANY}, ['id'], ['id'], []),
+    'companies': ('Companies whose name or alias has the text, with the number of sections, signals and open jobs.',
+                  {'text': {'type': 'string', 'maxLength': 100}, 'limit': LIMIT}, ['text'], ['text'], ['limit']),
+    'signals': ('The signals (news and events) of one company, newest first. `before` is the `next` of the page '
+                'before.', {'id': COMPANY, 'kind': {'type': 'string', 'enum': list(SIGNALS)},
+                            'limit': {'type': 'integer', 'minimum': 1, 'maximum': 100},
+                            'before': {'type': 'string', 'description': 'JSON of `next`'}}, ['id'], ['id'],
+                ['kind', 'limit', 'before']),
+    'company-add': ('Make a company, or change its name and aliases. source and key are the identity of the '
+                    'company in your source; the same pair again gives the same company. Needs company.change.',
+                    {'source': {'type': 'string'}, 'key': {'type': 'string'}, 'name': {'type': 'string'},
+                     'alias': {'type': 'array', 'items': {'type': 'string'}, 'maxItems': 50}},
+                    ['source', 'key', 'name'], [], ['source', 'key', 'name', 'alias']),
+    'section-set': ('Write a new version of one profile section of a company. The same content again changes '
+                    'nothing. Give the sources. Needs company.change.',
+                    {'id': COMPANY, 'kind': {'type': 'string', 'enum': list(SECTIONS)},
+                     'text': {'type': 'string', 'maxLength': 20000},
+                     'source': {'type': 'array', 'items': {'type': 'string'}, 'maxItems': 20},
+                     'as_of': {'type': 'string', 'description': 'Date, YYYY-MM-DD'}},
+                    ['id', 'kind', 'text'], ['id', 'kind'], ['text', 'source', 'as-of']),
+    'signal-add': ('Add one signal (a news item or an event) to a company. A signal with the same URL again '
+                   'changes nothing. Needs company.change.',
+                   {'id': COMPANY, 'kind': {'type': 'string', 'enum': list(SIGNALS)},
+                    'title': {'type': 'string', 'maxLength': 300}, 'date': {'type': 'string'},
+                    'summary': {'type': 'string', 'maxLength': 4000}, 'url': {'type': 'string'},
+                    'source_name': {'type': 'string'}, 'sentiment': {'type': 'integer', 'enum': [-1, 0, 1]}},
+                   ['id', 'kind', 'title'], ['id'],
+                   ['kind', 'title', 'date', 'summary', 'url', 'source-name', 'sentiment']),
+    'signal-retract': ('Retract a wrong signal. Readers do not get it after that. Needs company.change.',
+                       {'signal_id': {'type': 'string'}, 'reason': {'type': 'string', 'maxLength': 500}},
+                       ['signal_id', 'reason'], ['signal_id'], ['reason']),
     'tags': ('The city and function codes.', {'kind': {'type': 'string', 'enum': ['city', 'function']}}, [], [],
              ['kind']),
 }
@@ -331,8 +431,11 @@ def tool_call(name, given):
         value = given.get(option.replace('-', '_'))
         if value is True:
             argv.append('--' + option)
+        elif isinstance(value, list):
+            for item in value:
+                argv += ['--' + option, str(item)]
         elif value is not None and value is not False:
-            argv += ['--' + option, str(value)]
+            argv += ['--' + option + '=' + str(value)]
     try:
         return json.dumps(main(argv), ensure_ascii=False), False
     except Failure as failure:
@@ -417,6 +520,39 @@ def main(argv=None):
         if name == 'match-job':
             command.add_argument('--min-months', dest='min_months', type=int)
     commands.add_parser('tags').add_argument('--kind', choices=('city', 'function'))
+    commands.add_parser('company').add_argument('id')
+    command = commands.add_parser('companies')
+    command.add_argument('text')
+    command.add_argument('--limit', type=int, default=20)
+    command = commands.add_parser('signals')
+    command.add_argument('id')
+    command.add_argument('--kind', choices=SIGNALS)
+    command.add_argument('--limit', type=int, default=20)
+    command.add_argument('--before', type=json.loads)
+    command = commands.add_parser('company-add')
+    command.add_argument('--source', required=True)
+    command.add_argument('--key', required=True)
+    command.add_argument('--name', required=True)
+    command.add_argument('--alias', action='append')
+    command = commands.add_parser('section-set')
+    command.add_argument('id')
+    command.add_argument('kind', choices=SECTIONS)
+    command.add_argument('--text')
+    command.add_argument('--file', type=Path)
+    command.add_argument('--source', action='append')
+    command.add_argument('--as-of', dest='as_of')
+    command = commands.add_parser('signal-add')
+    command.add_argument('id')
+    command.add_argument('--kind', required=True, choices=SIGNALS)
+    command.add_argument('--title', required=True)
+    command.add_argument('--date')
+    command.add_argument('--summary')
+    command.add_argument('--url')
+    command.add_argument('--source-name', dest='source_name')
+    command.add_argument('--sentiment', type=int, choices=(-1, 0, 1))
+    command = commands.add_parser('signal-retract')
+    command.add_argument('signal_id')
+    command.add_argument('--reason', required=True)
     commands.add_parser('mcp')
     commands.add_parser('guide')
     commands.add_parser('version')
@@ -472,23 +608,54 @@ def main(argv=None):
                                    filters=filters(arguments, ('city', 'function', 'min_degree', 'min_months',
                                                                'include_unknown'))))
     if arguments.command == 'jobs' and arguments.text:
-        return search(arguments.text, target='jobs', limit=arguments.limit,
-                      filters=filters(arguments, ('city', 'function')))
+        return with_job_ids(search(arguments.text, target='jobs', limit=arguments.limit,
+                                   filters=filters(arguments, ('city', 'function'))))
     if arguments.command == 'search':
         return with_ani_ids(call('candidate_find', p_text=' '.join(arguments.terms) or None, p_limit=arguments.limit,
                                  p_filters=filters(arguments, ('city', 'function', 'min_degree', 'min_months',
                                                                'include_unknown'))))
     if arguments.command == 'jobs':
-        return call('job_list', p_query=arguments.query, p_limit=arguments.limit, p_cursor=arguments.cursor)
+        return with_job_ids(call('job_list', p_query=arguments.query, p_limit=arguments.limit,
+                                 p_cursor=arguments.cursor))
     if arguments.command == 'job':
-        return call('job_get', p_job_id=arguments.id)
+        return with_job_ids(call('job_get', p_job_id=resolve_job(arguments.id)))
     if arguments.command == 'match-job':
-        return with_ani_ids(call('job_match_candidates', p_job_id=arguments.id, p_limit=arguments.limit,
-                                 p_filters=filters(arguments, ('city', 'function', 'min_months'))))
+        return with_job_ids(with_ani_ids(call(
+            'job_match_candidates', p_job_id=resolve_job(arguments.id), p_limit=arguments.limit,
+            p_filters=filters(arguments, ('city', 'function', 'min_months')))))
     if arguments.command == 'match-candidate':
         candidate = resolve(arguments.id)
-        return with_ani_ids(call('candidate_match_jobs', p_candidate_id=candidate, p_limit=arguments.limit,
-                                 p_filters=filters(arguments, ('city', 'function'))), candidate)
+        return with_job_ids(with_ani_ids(call('candidate_match_jobs', p_candidate_id=candidate,
+                                              p_limit=arguments.limit,
+                                              p_filters=filters(arguments, ('city', 'function'))), candidate))
+    if arguments.command == 'company':
+        return call('company_get', p_id=company_id(arguments.id))
+    if arguments.command == 'companies':
+        return call('company_find', p_query=arguments.text, p_limit=arguments.limit)
+    if arguments.command == 'signals':
+        return call('company_signals', p_id=company_id(arguments.id), p_kind=arguments.kind,
+                    p_limit=arguments.limit, p_before=arguments.before)
+    if arguments.command == 'company-add':
+        return call('company_put', p_source=arguments.source, p_source_key=arguments.key, p_name=arguments.name,
+                    p_aliases=arguments.alias)
+    if arguments.command == 'section-set':
+        if (arguments.text is None) == (arguments.file is None):
+            raise Failure('invalid_arguments', hint='Give --text or --file, and not the two.')
+        try:
+            text = arguments.text if arguments.file is None else arguments.file.expanduser().read_text()
+        except (OSError, UnicodeError):
+            raise Failure('file_not_readable') from None
+        return call('company_section_put', p_id=company_id(arguments.id), p_kind=arguments.kind, p_text=text,
+                    p_sources=arguments.source, p_as_of=arguments.as_of,
+                    p_origin={'client': 'ani-talent ' + VERSION})
+    if arguments.command == 'signal-add':
+        signal = {'kind': arguments.kind, 'title': arguments.title, 'occurred_on': arguments.date,
+                  'summary': arguments.summary, 'url': arguments.url, 'source_name': arguments.source_name,
+                  'sentiment': arguments.sentiment, 'origin': {'client': 'ani-talent ' + VERSION}}
+        return call('company_signal_put', p_id=company_id(arguments.id),
+                    p_signal={name: value for name, value in signal.items() if value is not None})
+    if arguments.command == 'signal-retract':
+        return call('company_signal_retract', p_signal_id=arguments.signal_id, p_reason=arguments.reason)
     return call('dictionary_list', p_kind=arguments.kind)
 
 
