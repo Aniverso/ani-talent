@@ -1,28 +1,55 @@
-# Publishes the package to PyPI when a tag `v<VERSION>` is pushed.
-# PyPI accepts the upload through Trusted Publishing: it trusts this workflow file
-# in this repository and the environment `pypi`. There is no API token.
+# Publishes the package to PyPI when ani_talent.VERSION on main is a new version.
+#
+# The workflow runs after each push to main that changes ani_talent/__init__.py.
+# If the tag v<VERSION> does not exist, it builds the package, publishes it, and then
+# makes the tag and a GitHub release. If the tag exists, it does nothing.
+#
+# PyPI accepts the upload through Trusted Publishing: it trusts this file name
+# (release.yml) in this repository and the environment `pypi`. There is no API token.
+# Do not rename this file.
 name: Release
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+    paths: ['ani_talent/__init__.py']
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      new: ${{ steps.version.outputs.new }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        name: Find whether VERSION is new
+        run: |
+          version=$(python3 -c 'import ani_talent; print(ani_talent.VERSION)')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null; then
+            echo "The tag v$version exists. Nothing to publish."
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "v$version is a new version."
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: check
+    if: needs.check.outputs.new == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - name: Make sure that the tag agrees with VERSION
-        run: |
-          version=$(python3 -c 'import ani_talent; print(ani_talent.VERSION)')
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "The tag is $GITHUB_REF_NAME, but ani_talent.VERSION is $version." >&2
-            exit 1
-          fi
       - run: uv build
       - name: Run the built wheel
         run: uvx --from "$(ls dist/*.whl)" ani-talent version
@@ -45,3 +72,21 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+  tag:
+    needs: [check, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Make the tag and the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          gh release create "v$VERSION" dist/* --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "v$VERSION" --generate-notes
