@@ -45,7 +45,9 @@ none, ask the person for the code.
 | Candidates by meaning, words and filters | `search [--text "TEXT"] [WORD...] [--city CODE] [--function CODE] [--min-degree DEGREE] [--min-months N]` | consultant, pm |
 | Jobs | `jobs [--query TEXT] [--limit N]`, `jobs --text "TEXT"` (by meaning), `job ID` | pm |
 | Candidates for a job | `match-job JOB_ID [--limit N] [--city CODE] [--function CODE]` | pm |
+| Candidates for a job that is not in the database | `match-job (--text TEXT \| --file PATH) [...]` | pm |
 | Jobs for a candidate | `match-candidate CANDIDATE_ID [--limit N]` | pm |
+| Jobs for a person who is not in the database | `match-candidate (--text TEXT \| --file PATH) [...]` | pm |
 | Codes for `--city` and `--function` | `tags [--kind city]` | all |
 | One company record | `company ID` | pm |
 | Companies by name | `companies TEXT [--limit N]` | pm |
@@ -127,6 +129,17 @@ embedding service of the database; do not put a name or a contact value in it.
 `match-job` and
 `match-candidate` use meaning; they give a list to examine, not a decision. Read the
 `passages` and the `signals` of each result before you recommend a person.
+
+A job or a person does not have to be in the database for a match. When the user gives a job
+description or a resume that the database does not have, do not stop: give its text to
+`match-job --text` (a job) or `match-candidate --text` (a resume), or the path of a UTF-8 text
+file with `--file`. For a PDF or a Word file, read its text first and give the text. The text can
+have 16,000 characters. For a job, give the title, the duties and the requirements; leave out
+the benefits and the company introduction. For a resume, give all of it. The database masks the
+contact values (telephone, email, URL, handle) before the text goes to the embedding service,
+and it does not keep the text. A name stays in the text, so remove it when you can. The result
+has the same form as a match by ID, with no `signals`. `match-candidate --text` gives the
+`passage` of the resume that matched each job. A text match counts for its own daily limit.
 
 ## As MCP tools
 

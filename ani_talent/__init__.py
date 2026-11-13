@@ -29,7 +29,9 @@ file also runs as `python3 ani_talent.py`.
   ani_talent.py jobs --text TEXT [--limit N] [--city CODE] [--function CODE]   # Jobs by meaning.
   ani_talent.py job ID                    # ID: a job code (AniJ48203715) or a UUID.
   ani_talent.py match-job JOB_ID [--limit N] [--city CODE] [--function CODE] [--min-months N]
+  ani_talent.py match-job --text TEXT | --file PATH [...]   # A job that is not in the library.
   ani_talent.py match-candidate CANDIDATE_ID [--limit N] [--city CODE] [--function CODE]
+  ani_talent.py match-candidate --text TEXT | --file PATH [...]   # A resume that is not in the library.
   ani_talent.py tags [--kind city|function]    # The codes for --city and --function.
 
   ani_talent.py company ID                # One company record: names, profile sections, newest
@@ -76,7 +78,7 @@ import time
 from urllib.parse import quote, urlsplit
 
 BASE = 'https://vnpidbfkvfytudqvsjfm.supabase.co'
-VERSION = '0.6.0'
+VERSION = '0.7.0'
 # The publishable key identifies the project. It is not a secret: with no account it reads nothing.
 DEFAULT_KEY = 'sb_publishable_WY1XKEoEkXumGKcTTdrRag_SQtvl_AK'
 KEY_SHA256 = 'f30517481a7374eda124db8e06192032eb0f2dd2da15223c746911f7d4cedf6d'
@@ -216,6 +218,26 @@ def search(text, **body):
         code = value.get('code') if isinstance(value, dict) else None
         raise Failure('request_refused', operation='talent-search', http_status=status, code=code)
     return value
+
+
+def match_text(arguments):
+    """Match a job text or a resume text that is not in the library. The database masks the
+    contact values before the embedding call; the text is not stored."""
+    if sum(bool(item) for item in (arguments.id, arguments.text, arguments.file)) != 1:
+        raise Failure('invalid_arguments', hint='Give one of: an ID, --text or --file.')
+    text = arguments.text
+    if arguments.file:
+        try:
+            text = Path(arguments.file).expanduser().read_text(encoding='utf-8')
+        except (OSError, UnicodeDecodeError):
+            raise Failure('invalid_file', hint='Give a UTF-8 text file. For a PDF or Word file, give its text.') from None
+    text = text.strip()
+    if not 20 <= len(text) <= MATCH_LIMIT:
+        raise Failure('invalid_text', hint=f'The text must have 20 to {MATCH_LIMIT} characters.')
+    keys = ('city', 'function', 'min_months') if arguments.command == 'match-job' else ('city', 'function')
+    target = 'match_candidates' if arguments.command == 'match-job' else 'match_jobs'
+    value = search(text, target=target, limit=arguments.limit, filters=filters(arguments, keys))
+    return with_ani_ids(value) if target == 'match_candidates' else with_job_ids(value)
 
 
 def resolve(value):
@@ -367,11 +389,15 @@ def filters(arguments, names):
     return chosen
 
 
+MATCH_LIMIT = 16000
 ID = {'type': 'string', 'description': 'An Ani ID (Ani48203715) or a UUID'}
 JOB = {'type': 'string', 'description': 'A job code (AniJ48203715) or a UUID'}
 COMPANY = {'type': 'string', 'description': 'A company code (AniC59310427) or a UUID'}
 LIMIT = {'type': 'integer', 'minimum': 1, 'maximum': 50}
 CODE = {'type': 'string', 'description': 'A dictionary code from the tool tags, for example city.shanghai'}
+MATCH_TEXT = {'type': 'string', 'maxLength': MATCH_LIMIT,
+              'description': 'The text of a job or a resume that is not in the library'}
+MATCH_FILE = {'type': 'string', 'description': 'A UTF-8 text file on this computer with that text (not PDF or Word)'}
 # MCP tool: (description, properties, required, positional arguments, options).
 TOOLS = {
     'login': ('Send a sign-in code to the mailbox of the account.', {'email': {'type': 'string'}}, ['email'],
@@ -419,13 +445,16 @@ TOOLS = {
              {'text': {'type': 'string', 'maxLength': 400}, 'query': {'type': 'string'}, 'city': CODE,
               'function': CODE, 'limit': LIMIT}, [], [], ['text', 'query', 'city', 'function', 'limit']),
     'job': ('One job, with its job code and the code of its company.', {'id': JOB}, ['id'], ['id'], []),
-    'match-job': ('The candidates for one job, by meaning, best first. A list to examine, not a decision.',
-                  {'id': JOB, 'limit': LIMIT, 'city': CODE, 'function': CODE,
-                   'min_months': {'type': 'integer', 'minimum': 0}}, ['id'], ['id'],
-                  ['limit', 'city', 'function', 'min-months']),
-    'match-candidate': ('The jobs for one candidate, by meaning, best first.',
-                        {'id': ID, 'limit': LIMIT, 'city': CODE, 'function': CODE}, ['id'], ['id'],
-                        ['limit', 'city', 'function']),
+    'match-job': ('The candidates for one job, by meaning, best first. A list to examine, not a decision. '
+                  'Give id for a job of the library, or text (or file) for a job that is not in it: the '
+                  'title, the duties and the requirements of the job.',
+                  {'id': JOB, 'text': MATCH_TEXT, 'file': MATCH_FILE, 'limit': LIMIT, 'city': CODE,
+                   'function': CODE, 'min_months': {'type': 'integer', 'minimum': 0}}, [], ['id'],
+                  ['text', 'file', 'limit', 'city', 'function', 'min-months']),
+    'match-candidate': ('The jobs for one candidate, by meaning, best first. Give id for a candidate of the '
+                        'library, or text (or file) for a resume that is not in it: the full resume text.',
+                        {'id': ID, 'text': MATCH_TEXT, 'file': MATCH_FILE, 'limit': LIMIT, 'city': CODE,
+                         'function': CODE}, [], ['id'], ['text', 'file', 'limit', 'city', 'function']),
     'guide': ('How to use these tools: the search method, the roles, the limits and the rules. '
               'Read it one time before the first search.', {}, [], [], []),
     'company': ('The record of one company: names, the current profile sections (overview, business, funding, '
@@ -620,7 +649,9 @@ def main(argv=None):
     command.add_argument('--cursor', type=json.loads)
     for name in ('match-job', 'match-candidate'):
         command = commands.add_parser(name)
-        command.add_argument('id')
+        command.add_argument('id', nargs='?')
+        command.add_argument('--text')
+        command.add_argument('--file')
         command.add_argument('--limit', type=int, default=20)
         command.add_argument('--city')
         command.add_argument('--function')
@@ -744,6 +775,10 @@ def main(argv=None):
                                  p_cursor=arguments.cursor))
     if arguments.command == 'job':
         return with_job_ids(call('job_get', p_job_id=resolve_job(arguments.id)))
+    if arguments.command in ('match-job', 'match-candidate') and (arguments.text or arguments.file):
+        return match_text(arguments)
+    if arguments.command in ('match-job', 'match-candidate') and not arguments.id:
+        raise Failure('invalid_arguments', hint='Give an ID, or --text or --file for a text that is not in the library.')
     if arguments.command == 'match-job':
         return with_job_ids(with_ani_ids(call(
             'job_match_candidates', p_job_id=resolve_job(arguments.id), p_limit=arguments.limit,
