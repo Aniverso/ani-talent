@@ -48,7 +48,12 @@ none, ask the person for the code.
 | One company record | `company ID` | pm |
 | Companies by name | `companies TEXT [--limit N]` | pm |
 | Signals (news and events) of a company | `signals ID [--kind KIND] [--limit N] [--before JSON]` | pm |
-| Make a company, or change its names | `company-add --source S --key K --name NAME [--alias NAME ...]` | company_agent |
+| Candidates with an employment at a company | `people ID [--current \| --past] [--limit N]` | pm |
+| Employments of a candidate, with their companies | `employers CANDIDATE_ID` | pm |
+| Make a company, or change its names | `company-add --source S --key K --name NAME [--alias NAME ...] [--new]` | company_agent |
+| Employer texts that are possibly this company | `alias-candidates ID [--limit N]` | company_agent |
+| Companies that share a name | `company-duplicates` | company_agent |
+| Merge one company into another | `company-merge FROM_ID INTO_ID --reason TEXT` | admin |
 | A new version of a profile section | `section-set ID KIND (--text TEXT \| --file PATH) [--source URL ...] [--as-of DATE]` | company_agent |
 | Add a signal | `signal-add ID --kind KIND --title TITLE [--date DATE] [--summary TEXT] [--url URL] [--source-name NAME] [--sentiment -1\|0\|1]` | company_agent |
 | Retract a wrong signal | `signal-retract SIGNAL_ID --reason TEXT` | company_agent |
@@ -77,8 +82,21 @@ the source: `--source URL` for a section, `--url` for a signal. `section-set` ad
 keeps the old ones; the same content again changes nothing. A signal with the same URL again
 changes nothing, so a second run of a collection is safe. Do not edit a wrong signal: use
 `signal-retract`, then add the correct one. For a company that is not in the database, use
-`company-add` with your own source name and a stable key of the company in that source. First
-look with `companies TEXT`: a company of a TTC job is there already.
+`company-add` with your own source name and a stable key of the company in that source. If a
+company has that name or one of the aliases already, `company-add` makes nothing and gives that
+company with `existing` true: write your sections and signals to its `ani_id`. Two names are the
+same when they differ only in case, spaces, punctuation or the legal form at the end (有限公司,
+Ltd, Inc). Use `--new` only when you are sure that it is a different company with the same name.
+
+An employment of a candidate belongs to a company when its company text is a name or an alias
+of the company. `people ID` gives these candidates (summaries with no name; `--past` gives the
+candidates with no current employment there), and `employers CANDIDATE_ID` gives the company of
+each employment. Many employer texts are longer than the company name (a legal name, a city
+before the name). `alias-candidates ID` lists such texts for one company: decide for each text
+if it is the same company, and add the ones that are with `company-add` (the same source and
+key, `--name` as it is, and each alias again with the new ones: the given aliases take the place
+of the old ones). The link is there at once. Do not add a text of a different company: a parent,
+a subsidiary with its own business, or another company with a similar name.
 
 `search` gives a list of summaries (title, company, degree, months, city and function
 codes), with no name. `--text` is one sentence that says which person you look for; the
