@@ -8,7 +8,7 @@ file also runs as `python3 ani_talent.py`.
   ani_talent.py guide                     # How to use this tool, for a person or an Agent.
   ani_talent.py login EMAIL               # Sends a code to your mailbox.
   ani_talent.py verify EMAIL CODE         # Starts the session (kept for this computer).
-  ani_talent.py status                    # The account of the session and its end time.
+  ani_talent.py status                    # The account of the session, its role, capabilities, limits and use.
   ani_talent.py logout
 
   ani_talent.py candidate ID              # One candidate: career with descriptions and passages.
@@ -53,7 +53,8 @@ file also runs as `python3 ani_talent.py`.
 
 For an Agent that uses MCP (Codex, Claude Code, Cursor and others), add this server
 with the command `ani-talent mcp`. Its tools are the commands above, with the same
-account, role and limits.
+account, role and limits. The server lists only the tools that the role of the account can
+use; with no session it lists all.
 
 Output is JSON on stdout. A failure is JSON on stderr with exit code 1:
 `http_status` 403 = your role does not allow the command; 429 = a limit of your role is
@@ -75,7 +76,7 @@ import time
 from urllib.parse import quote, urlsplit
 
 BASE = 'https://vnpidbfkvfytudqvsjfm.supabase.co'
-VERSION = '0.5.0'
+VERSION = '0.6.0'
 # The publishable key identifies the project. It is not a secret: with no account it reads nothing.
 DEFAULT_KEY = 'sb_publishable_WY1XKEoEkXumGKcTTdrRag_SQtvl_AK'
 KEY_SHA256 = 'f30517481a7374eda124db8e06192032eb0f2dd2da15223c746911f7d4cedf6d'
@@ -377,7 +378,9 @@ TOOLS = {
               ['email'], []),
     'verify': ('Start the session with the code from the mailbox.',
                {'email': {'type': 'string'}, 'code': {'type': 'string'}}, ['email', 'code'], ['email', 'code'], []),
-    'status': ('The account of the session and its end time.', {}, [], [], []),
+    'status': ('The account of the session: its role, capabilities, limits, and the number of different '
+               'candidates that it read today and in the last 30 days. Read it when a tool gives a limit '
+               'failure, or before a large task.', {}, [], [], []),
     'candidate': ('One candidate: current values, each experience with its description, the education rows, '
                   'and `passages` (the text, skills, domains and skill months of each employment and project).',
                   {'id': ID}, ['id'], ['id'], []),
@@ -483,6 +486,36 @@ TOOLS = {
 }
 
 
+# The capability that a tool needs. A tool that is not here is for each account.
+NEEDS = {
+    **dict.fromkeys(('candidate', 'candidates', 'text', 'summary', 'education', 'history', 'search'), 'profile.read'),
+    'contacts': 'contact.read', 'file': 'file.read', 'jobs': 'job.read', 'job': 'job.read',
+    'match-job': 'match.run', 'match-candidate': 'match.run',
+    **dict.fromkeys(('company', 'companies', 'signals', 'people', 'employers'), 'company.read'),
+    **dict.fromkeys(('company-add', 'alias-candidates', 'company-duplicates', 'section-set', 'signal-add',
+                     'signal-retract'), 'company.change'),
+    'company-merge': 'company.merge',
+}
+
+
+def access():
+    """The role, capabilities, limits and use of the account. None when it is not known:
+    no session, no network, or a database with no `access_self`."""
+    try:
+        value = call('access_self')
+    except (Failure, OSError):
+        return None
+    return value if isinstance(value, dict) and isinstance(value.get('capabilities'), list) else None
+
+
+def usable(name, value):
+    """False only when the account is known and has no grant for the capability of the tool."""
+    need = NEEDS.get(name)
+    if value is None or need is None:
+        return True
+    return need in value['capabilities'] or need in (value.get('scoped_capabilities') or [])
+
+
 def tool_call(name, given):
     """Run one tool as the same command. Returns the text and the error mark."""
     if name not in TOOLS or not isinstance(given, dict):
@@ -534,10 +567,12 @@ def serve():
         elif method == 'ping':
             result = {}
         elif method == 'tools/list':
+            mine = access()  # Only the tools that the account can use; all when the account is not known.
             result = {'tools': [{'name': name, 'description': description,
                                  'inputSchema': {'type': 'object', 'properties': properties, 'required': required,
                                                  'additionalProperties': False}}
-                                for name, (description, properties, required, _, _) in TOOLS.items()]}
+                                for name, (description, properties, required, _, _) in TOOLS.items()
+                                if usable(name, mine)]}
         elif method == 'tools/call':
             text, failed = tool_call(parameters.get('name'), parameters.get('arguments') or {})
             result = {'content': [{'type': 'text', 'text': text}], 'isError': failed}
@@ -676,7 +711,7 @@ def main(argv=None):
         if not session:
             return {'signed_in': False}
         return {'signed_in': True, 'email': session['email'],
-                'session_ends_in_seconds': max(0, int(session['expires_at'] - time.time()))}
+                'session_ends_in_seconds': max(0, int(session['expires_at'] - time.time())), **(access() or {})}
     if arguments.command == 'logout':
         session = read('session.json')
         if session:

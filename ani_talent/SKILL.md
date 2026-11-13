@@ -147,6 +147,8 @@ args = ["ani-talent", "mcp"]
 
 The tools have the names of the commands (`login`, `verify`, `candidate`, `match-job` and
 the others), with the same account, role and limits. The tool `guide` gives this text.
+The server lists only the tools that the role of the account can use. A client reads the
+list at its start: start the client again after a sign-in or a change of the role.
 
 ## Rules
 
@@ -157,6 +159,8 @@ the others), with the same account, role and limits. The tool `guide` gives this
   `day` starts again at 00:00 Asia/Shanghai. At `30_days` you can read the candidates that you
   read in the last 30 days, and no new one. Do not try another way; tell the person.
 - `http_status` 403 means that your role does not allow the command. Ask your admin.
+- `status` shows your role, your capabilities, your limits (`limits`) and what you used
+  (`used`: different candidates today and in the last 30 days). Read it before a large task.
 - Do not copy many candidates or contact values into a file, a message or another
   system. There is no export. Give the person the candidates that the task needs.
 - Do not give your session file or your code to another person or Agent.
