@@ -52,8 +52,6 @@ none, ask the person for the code.
 | One company record | `company ID` | pm |
 | Companies by name | `companies TEXT [--limit N]` | pm |
 | Signals (news and events) of a company | `signals ID [--kind KIND] [--limit N] [--before JSON]` | pm |
-| Signals of all companies by meaning (news, events, TTC recommendation history) | `signal-search TEXT [--kind KIND] [--since DATE] [--company ID] [--limit N]` | pm |
-| Client feedback lines by meaning (why a client passed or rejected a person) | `feedback-search TEXT [--outcome pass\|reject] [--stage resume\|interview] [--since DATE] [--company ID] [--job TEXT] [--limit N]` | pm |
 | Candidates with an employment at a company | `people ID [--current \| --past] [--limit N]` | pm |
 | Employments of a candidate, with their companies | `employers CANDIDATE_ID` | pm |
 | Make a company, or change its names | `company-add --source S --key K --name NAME [--alias NAME ...] [--new]` | company_agent |
