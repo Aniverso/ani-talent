@@ -1,6 +1,6 @@
 ---
 name: ani-talent
-description: Read the Ani talent database with your own account. Use to look up a candidate, read contact values, save an original resume file, search candidates by words, list and read jobs, and match jobs and candidates. Your role decides which commands work. Not for writing data and not for account management.
+description: Read the Ani talent database with your own account. Use to look up a candidate, read contact values, save an original resume file, search candidates by words, list and read jobs, match jobs and candidates, and read or write company records (profile and signals). Your role decides which commands work. Not for candidate or job changes and not for account management.
 ---
 
 # Ani talent database
@@ -45,6 +45,13 @@ none, ask the person for the code.
 | Candidates for a job | `match-job JOB_ID [--limit N] [--city CODE] [--function CODE]` | pm |
 | Jobs for a candidate | `match-candidate CANDIDATE_ID [--limit N]` | pm |
 | Codes for `--city` and `--function` | `tags [--kind city]` | all |
+| One company record | `company ID` | pm |
+| Companies by name | `companies TEXT [--limit N]` | pm |
+| Signals (news and events) of a company | `signals ID [--kind KIND] [--limit N] [--before JSON]` | pm |
+| Make a company, or change its names | `company-add --source S --key K --name NAME [--alias NAME ...]` | company_agent |
+| A new version of a profile section | `section-set ID KIND (--text TEXT \| --file PATH) [--source URL ...] [--as-of DATE]` | company_agent |
+| Add a signal | `signal-add ID --kind KIND --title TITLE [--date DATE] [--summary TEXT] [--url URL] [--source-name NAME] [--sentiment -1\|0\|1]` | company_agent |
+| Retract a wrong signal | `signal-retract SIGNAL_ID --reason TEXT` | company_agent |
 
 Each candidate has an Ani ID, such as `Ani000123`. An `ID` of a candidate can be the Ani ID
 or the UUID. Results show `ani_id` next to each `candidate_id`. Use the Ani ID when you tell a
@@ -54,6 +61,24 @@ person about a candidate.
 (the current folder if you give no `--out`). Not every candidate has one. Each `file` call is
 recorded and counts for a daily limit of its own. Keep the file private: do not send it to
 another person or service unless the task needs it.
+
+A job has a code such as `AniJ48203715`, and a company has a code such as `AniC59310427`. The codes
+are not in sequence. An `ID` of a job or a company can be the code or the UUID. A job result
+shows `ani_id` and, if the company has a record, `company_ani_id`.
+
+A company record has the names of the company, profile sections (`overview`, `business`,
+`funding`, `finance`, `organization`, `other`), signals (kinds: `funding`, `layoff`,
+`organization`, `product`, `business`, `legal`, `people`, `hiring`, `negative`, `other`) and its
+jobs. Before you work on a job, read `company COMPANY_ID` of its `company_ani_id`: not each company
+has sections or signals. `company` shows the 10 newest signals; `signals` gives all, in pages.
+
+To write a record you need the role `company_agent`. Write facts that a source states, and give
+the source: `--source URL` for a section, `--url` for a signal. `section-set` adds a version and
+keeps the old ones; the same content again changes nothing. A signal with the same URL again
+changes nothing, so a second run of a collection is safe. Do not edit a wrong signal: use
+`signal-retract`, then add the correct one. For a company that is not in the database, use
+`company-add` with your own source name and a stable key of the company in that source. First
+look with `companies TEXT`: a company of a TTC job is there already.
 
 `search` gives a list of summaries (title, company, degree, months, city and function
 codes), with no name. `--text` is one sentence that says which person you look for; the
