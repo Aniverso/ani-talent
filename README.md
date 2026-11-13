@@ -63,9 +63,10 @@ The tool `guide` tells the Agent how to use them. For an Agent that reads skill 
 
 ## Release
 
-Set `VERSION` in `ani_talent/__init__.py`, merge, then push the tag `v<VERSION>`.
-The workflow `.github/workflows/release.yml` builds the package and publishes it to
-PyPI through Trusted Publishing.
+Set a new `VERSION` in `ani_talent/__init__.py` and merge it to `main`. The workflow
+`.github/workflows/release.yml` then builds the package, publishes it to PyPI through
+Trusted Publishing, and makes the tag `v<VERSION>` and a GitHub release. A merge that
+does not change `VERSION` publishes nothing. PyPI accepts each version one time only.
 
 ## License
 
