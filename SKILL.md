@@ -1,6 +1,6 @@
 ---
 name: ani-talent
-description: Read the Ani talent database with your own account. Use to look up a candidate, read contact values, search candidates by words, list and read jobs, and match jobs and candidates. Your role decides which commands work. Not for writing data and not for account management.
+description: Read the Ani talent database with your own account. Use to look up a candidate, read contact values, save an original resume file, search candidates by words, list and read jobs, and match jobs and candidates. Your role decides which commands work. Not for writing data and not for account management.
 ---
 
 # Ani talent database
@@ -32,11 +32,21 @@ none, ask the person for the code.
 | Education rows and the city that the resume states | `education ID` | consultant, pm |
 | Contact values | `contacts ID` | consultant, pm |
 | Revisions of a candidate | `history ID` | consultant, pm |
+| The original resume file (PDF or Word), saved as `<Ani ID>.pdf` | `file ID [--out DIR]` | pm |
 | Candidates by meaning, words and filters | `search [--text "TEXT"] [WORD...] [--city CODE] [--function CODE] [--min-degree DEGREE] [--min-months N]` | consultant, pm |
 | Jobs | `jobs [--query TEXT] [--limit N]`, `jobs --text "TEXT"` (by meaning), `job ID` | pm |
 | Candidates for a job | `match-job JOB_ID [--limit N] [--city CODE] [--function CODE]` | pm |
 | Jobs for a candidate | `match-candidate CANDIDATE_ID [--limit N]` | pm |
 | Codes for `--city` and `--function` | `tags [--kind city]` | all |
+
+Each candidate has an Ani ID, such as `Ani000123`. An `ID` of a candidate can be the Ani ID
+or the UUID. Results show `ani_id` next to each `candidate_id`. Use the Ani ID when you tell a
+person about a candidate.
+
+`file` saves the newest original resume file of one candidate in a folder of this computer
+(the current folder if you give no `--out`). Not every candidate has one. Each `file` call is
+recorded and counts for a daily limit of its own. Keep the file private: do not send it to
+another person or service unless the task needs it.
 
 `search` gives a list of summaries (title, company, degree, months, city and function
 codes), with no name. `--text` is one sentence that says which person you look for; the
