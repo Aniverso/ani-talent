@@ -10,10 +10,17 @@ the command `ani-talent` (Python 3.9 or later, no other package). Each command p
 
 ## One-time setup
 
-Install with [uv](https://docs.astral.sh/uv/):
+Install with one command. It also signs you in and adds the MCP server to Claude Code
+and Codex:
 
 ```bash
-uv tool install git+https://github.com/Aniverso/ani-talent
+curl -fsSL https://raw.githubusercontent.com/Aniverso/ani-talent/main/install.sh | sh
+```
+
+Or install by hand with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv tool install ani-talent
 ani-talent login you@example.com      # A code comes to your mailbox.
 ani-talent verify you@example.com 123456
 ```
@@ -56,7 +63,7 @@ An Agent that uses the Model Context Protocol (Claude Code, Codex, Cursor and ot
 add the tool as a server. No install is necessary: `uvx` gets the tool at each start.
 
 ```bash
-claude mcp add ani-talent -- uvx --from git+https://github.com/Aniverso/ani-talent ani-talent mcp
+claude mcp add --scope user ani-talent -- uvx ani-talent mcp
 ```
 
 For Codex, in `~/.codex/config.toml`:
@@ -64,7 +71,7 @@ For Codex, in `~/.codex/config.toml`:
 ```toml
 [mcp_servers.ani-talent]
 command = "uvx"
-args = ["--from", "git+https://github.com/Aniverso/ani-talent", "ani-talent", "mcp"]
+args = ["ani-talent", "mcp"]
 ```
 
 The tools have the names of the commands (`login`, `verify`, `candidate`, `match-job` and
