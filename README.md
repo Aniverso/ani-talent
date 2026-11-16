@@ -51,7 +51,7 @@ Another Agent: add an MCP server with the command `uvx ani-talent mcp`.
 The Agent then has the tools `search`, `candidate`, `jobs`, `match-job` and the others.
 The match tools also take the text of a job or a resume that is not in the database.
 The tool `guide` tells the Agent how to use them. For an Agent that reads skill files,
-[SKILL.md](SKILL.md) has the same text.
+the packaged `ani_talent/SKILL.md` has the same text.
 
 ## What to know
 

@@ -100,16 +100,22 @@ each employment.
 
 `search` gives a list of summaries (title, company, degree, months, city and function
 codes), with no name. `--text` is one sentence that says which person you look for; the
-search is by meaning. Words find a candidate whose stored text has one of them (a skill, a
-company, a title, a school). Use the two together for the best order. A filter removes a
-candidate that has no value for it; add `--include-unknown` to keep those.
+search is by meaning. Words find a candidate whose resume has one of them (a skill, a
+company, a title, a school); give 16 words at most (`words_ignored` counts the others). The
+exact name of a person is a word too: that candidate comes first, with `name_match` true. Use
+the text and the words together for the best order. A filter keeps a candidate that has no
+value for it and lists that filter in `unknown` (for example `["city"]`); add `--known-only`
+to remove those. A result with no city is not a person in another city: check `unknown`.
 `--received-from DAY` and `--received-to DAY` (`YYYY-MM-DD`, China time, both days included)
 keep only candidates with a resume that came into the library in those days, for example the
 resumes of one weekend. One of the two alone is permitted, and the two dates alone are a
 filter (the list then has no order of relevance). Each result has `received_at`, the newest
 time that a resume of the candidate came in. The result can have `filtered_total`: the
 number of candidates that fit all the filters (the text and the words change only the order).
-Do not try to add up counts. Search more than
+Do not try to add up counts. A list comes in pages: when the result has `next`, call the same
+command again with `--offset NEXT` (the same text, words and filters) for the next page. This
+works for `search`, `jobs --text`, `match-job` and `match-candidate`. Each page counts for the
+daily list limit, so read more pages only when the first ones are good. Search more than
 one time with different sentences, then read `candidate ID` for the persons that you select:
 a list read and a detail read have different daily limits. The text of `--text` goes to the
 embedding service of the database; do not put a name or a contact value in it.
