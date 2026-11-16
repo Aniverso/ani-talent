@@ -21,20 +21,24 @@ file also runs as `python3 ani_talent.py`.
   ani_talent.py history ID                # The revisions of one candidate.
   ani_talent.py file ID [--out DIR]       # Save the original resume file (PDF or Word).
   ani_talent.py search [--text TEXT] [WORD...] [--city CODE] [--function CODE]
-                       [--min-degree DEGREE] [--min-months N] [--include-unknown]
-                       [--received-from DAY] [--received-to DAY] [--limit N]
+                       [--min-degree DEGREE] [--min-months N] [--known-only]
+                       [--received-from DAY] [--received-to DAY] [--limit N] [--offset N]
                                           # Candidates by meaning (--text), words and filters.
                                           # DAY: YYYY-MM-DD in China time, the day that a resume of
                                           # the candidate came into the library (both days included).
                                           # The result can have filtered_total: the number of
                                           # candidates that fit the filters.
-                                          # A list of summaries.
+                                          # A list of summaries. A filter keeps a candidate with
+                                          # no value for it (listed in unknown); --known-only
+                                          # removes them. --offset NEXT: the next page.
   ani_talent.py jobs [--query TEXT] [--limit N] [--cursor JSON]
-  ani_talent.py jobs --text TEXT [--limit N] [--city CODE] [--function CODE]   # Jobs by meaning.
+  ani_talent.py jobs --text TEXT [--limit N] [--offset N] [--city CODE] [--function CODE]   # Jobs by meaning.
   ani_talent.py job ID                    # ID: a job code (AniJ48203715) or a UUID.
-  ani_talent.py match-job JOB_ID [--limit N] [--city CODE] [--function CODE] [--min-months N]
+  ani_talent.py match-job JOB_ID [--limit N] [--offset N] [--city CODE] [--function CODE] [--min-months N]
+                       [--known-only]
   ani_talent.py match-job --text TEXT | --file PATH [...]   # A job that is not in the library.
-  ani_talent.py match-candidate CANDIDATE_ID [--limit N] [--city CODE] [--function CODE]
+  ani_talent.py match-candidate CANDIDATE_ID [--limit N] [--offset N] [--city CODE] [--function CODE]
+                       [--known-only]
   ani_talent.py match-candidate --text TEXT | --file PATH [...]   # A resume that is not in the library.
   ani_talent.py tags [--kind city|function]    # The codes for --city and --function.
 
@@ -79,7 +83,7 @@ except ImportError:  # Windows: no lock between processes.
     fcntl = None
 
 BASE = 'https://vnpidbfkvfytudqvsjfm.supabase.co'
-VERSION = '0.14.3'
+VERSION = '0.15.0'
 # The publishable key identifies the project. It is not a secret: with no account it reads nothing.
 KEY = 'sb_publishable_WY1XKEoEkXumGKcTTdrRag_SQtvl_AK'
 HOME = Path(os.environ.get('ANI_TALENT_HOME') or Path.home() / '.config' / 'ani-talent')
@@ -283,7 +287,8 @@ def match_text(arguments):
         raise Failure('invalid_text', hint=f'The text must have 20 to {MATCH_LIMIT} characters.')
     keys = ('city', 'function', 'min_months') if arguments.command == 'match-job' else ('city', 'function')
     target = 'match_candidates' if arguments.command == 'match-job' else 'match_jobs'
-    return search(arguments.command, text, target=target, limit=arguments.limit, filters=filters(arguments, keys))
+    return search(arguments.command, text, target=target, limit=arguments.limit, offset=page(arguments),
+                  filters=filters(arguments, keys))
 
 
 def save_file(arguments):
@@ -319,13 +324,30 @@ SEARCH_FILTERS = ('city', 'function', 'min_degree', 'min_months', 'include_unkno
 
 
 def filters(arguments, names):
-    return {name: getattr(arguments, name) for name in names if getattr(arguments, name) is not None}
+    value = {name: getattr(arguments, name) for name in names
+             if name != 'include_unknown' and getattr(arguments, name, None) is not None}
+    if getattr(arguments, 'known_only', None):
+        value['include_unknown'] = False
+    return value
+
+
+def page(arguments):
+    """The offset of a later page, or None for the first page."""
+    offset = getattr(arguments, 'offset', None)
+    if offset is not None and offset < 0:
+        raise Failure('invalid_arguments', hint='--offset is 0 or more: give the value of `next`.')
+    return offset or None
 
 
 ID = {'type': 'string', 'description': 'An Ani ID (Ani48203715) or a UUID'}
 JOB = {'type': 'string', 'description': 'A job code (AniJ48203715) or a UUID'}
 COMPANY = {'type': 'string', 'description': 'A company code (AniC59310427) or a UUID'}
 LIMIT = {'type': 'integer', 'minimum': 1, 'maximum': 50}
+OFFSET = {'type': 'integer', 'minimum': 0,
+          'description': 'The start of a later page: give the value of next from the result before'}
+KNOWN_ONLY = {'type': 'boolean',
+              'description': 'Remove the results that have no value for a filter (by default they stay, '
+                             'marked in unknown)'}
 CODE = {'type': 'string', 'description': 'A dictionary code from the tool tags, for example city.shanghai'}
 DAY = {'type': 'string', 'pattern': '^[0-9]{4}-[0-9]{2}-[0-9]{2}$',
        'description': 'A day YYYY-MM-DD in China time, for example 2026-11-14'}
@@ -367,37 +389,43 @@ TOOLS = {
              ['id'], ['id'], ['out']),
     'search': ('Search candidates', 'Candidates by meaning, words and filters, best first: a list of summaries '
                'with no name. text: one sentence that says which person you look for (search by meaning). terms: '
-               '8 words at most, a candidate with one of them is a hit (skill, company, title, school). Use text '
-               'and terms together for the best order. A filter removes a candidate with no value for it, unless '
-               'include_unknown is true. received_from and received_to (YYYY-MM-DD, China time, both days '
+               'words, a candidate whose resume has one of them is a hit (skill, company, title, school); 16 '
+               'words at most, words_ignored counts the others. The exact name of a person is a term too: that '
+               'candidate comes first with name_match true. Use text and terms together for the best order. A '
+               'filter keeps a candidate with no value for it and lists the filter in unknown; known_only removes '
+               'them. received_from and received_to (YYYY-MM-DD, China time, both days '
                'included) keep only candidates with a resume that came into the library in those days; each '
                'result has received_at. The result can have filtered_total: the number of candidates that fit the '
-               'filters. Search more '
-               'than one time with different texts for a full list.',
+               'filters. When the result has next, call again with offset = next for the next page.',
                {'text': {'type': 'string', 'maxLength': 400}, 'terms': {'type': 'array', 'items': {'type': 'string'},
-                                                                         'maxItems': 8},
+                                                                         'maxItems': 16},
                 'city': CODE, 'function': CODE,
                 'min_degree': {'type': 'string', 'enum': ['high_school', 'associate', 'bachelor', 'master', 'doctor']},
-                'min_months': {'type': 'integer', 'minimum': 0}, 'include_unknown': {'type': 'boolean'},
-                'received_from': DAY, 'received_to': DAY, 'limit': LIMIT}, [], ['terms'],
-               ['text', 'city', 'function', 'min-degree', 'min-months', 'include-unknown', 'received-from',
-                'received-to', 'limit']),
-    'jobs': ('List or search jobs', 'Jobs. With text: by meaning, best first. With query or nothing: newest first.',
+                'min_months': {'type': 'integer', 'minimum': 0}, 'known_only': KNOWN_ONLY,
+                'received_from': DAY, 'received_to': DAY, 'limit': LIMIT, 'offset': OFFSET}, [], ['terms'],
+               ['text', 'city', 'function', 'min-degree', 'min-months', 'known-only', 'received-from',
+                'received-to', 'limit', 'offset']),
+    'jobs': ('List or search jobs', 'Jobs. With text: by meaning, best first (offset = next gives the next page). '
+             'With query or nothing: newest first.',
              {'text': {'type': 'string', 'maxLength': 400}, 'query': {'type': 'string'}, 'city': CODE,
-              'function': CODE, 'limit': LIMIT}, [], [], ['text', 'query', 'city', 'function', 'limit']),
+              'function': CODE, 'limit': LIMIT, 'offset': OFFSET}, [], [],
+             ['text', 'query', 'city', 'function', 'limit', 'offset']),
     'job': ('Read one job', 'One job, with its job code and the code of its company.', {'id': JOB}, ['id'], ['id'],
             []),
     'match-job': ('Candidates for a job', 'The candidates for one job, by meaning, best first. A list to examine, '
                   'not a decision. Give id for a job of the library, or text (or file) for a job that is not in '
-                  'it: the title, the duties and the requirements of the job.',
+                  'it: the title, the duties and the requirements of the job. A filter keeps a candidate with no '
+                  'value for it (listed in unknown); known_only removes them. offset = next gives the next page.',
                   {'id': JOB, 'text': MATCH_TEXT, 'file': MATCH_FILE, 'limit': LIMIT, 'city': CODE,
-                   'function': CODE, 'min_months': {'type': 'integer', 'minimum': 0}}, [], ['id'],
-                  ['text', 'file', 'limit', 'city', 'function', 'min-months']),
+                   'function': CODE, 'min_months': {'type': 'integer', 'minimum': 0}, 'known_only': KNOWN_ONLY,
+                   'offset': OFFSET}, [], ['id'],
+                  ['text', 'file', 'limit', 'city', 'function', 'min-months', 'known-only', 'offset']),
     'match-candidate': ('Jobs for a candidate', 'The jobs for one candidate, by meaning, best first. Give id for '
                         'a candidate of the library, or text (or file) for a resume that is not in it: the full '
-                        'resume text.',
+                        'resume text. offset = next gives the next page.',
                         {'id': ID, 'text': MATCH_TEXT, 'file': MATCH_FILE, 'limit': LIMIT, 'city': CODE,
-                         'function': CODE}, [], ['id'], ['text', 'file', 'limit', 'city', 'function']),
+                         'function': CODE, 'known_only': KNOWN_ONLY, 'offset': OFFSET}, [], ['id'],
+                        ['text', 'file', 'limit', 'city', 'function', 'known-only', 'offset']),
     'tags': ('City and function codes', 'The city and function codes.',
              {'kind': {'type': 'string', 'enum': ['city', 'function']}}, [], [], ['kind']),
     'company': ('Read one company', 'The record of one company: names, the current profile sections (overview, '
@@ -601,16 +629,21 @@ def parser():
     command.add_argument('--min-degree', dest='min_degree',
                          choices=('high_school', 'associate', 'bachelor', 'master', 'doctor'))
     command.add_argument('--min-months', dest='min_months', type=int)
-    command.add_argument('--include-unknown', dest='include_unknown', action='store_true', default=None)
+    # Accepted for older Agents: a filter keeps the candidates with no value by default now.
+    command.add_argument('--include-unknown', dest='include_unknown', action='store_true', default=None,
+                         help=argparse.SUPPRESS)
+    command.add_argument('--known-only', dest='known_only', action='store_true', default=None)
     command.add_argument('--received-from', dest='received_from', metavar='DAY')
     command.add_argument('--received-to', dest='received_to', metavar='DAY')
     command.add_argument('--limit', type=int, default=20)
+    command.add_argument('--offset', type=int)
     command = commands.add_parser('jobs')
     command.add_argument('--query')
     command.add_argument('--text')
     command.add_argument('--city')
     command.add_argument('--function')
     command.add_argument('--limit', type=int, default=20)
+    command.add_argument('--offset', type=int)
     command.add_argument('--cursor', type=json.loads)
     for name in ('match-job', 'match-candidate'):
         command = commands.add_parser(name)
@@ -620,6 +653,8 @@ def parser():
         command.add_argument('--limit', type=int, default=20)
         command.add_argument('--city')
         command.add_argument('--function')
+        command.add_argument('--known-only', dest='known_only', action='store_true', default=None)
+        command.add_argument('--offset', type=int)
         if name == 'match-job':
             command.add_argument('--min-months', dest='min_months', type=int)
     commands.add_parser('tags').add_argument('--kind', choices=('city', 'function'))
@@ -701,12 +736,12 @@ def main(argv=None):
         return save_file(arguments)
     if command == 'search' and arguments.text:
         return search(command, arguments.text, words=' '.join(arguments.terms) or None, limit=arguments.limit,
-                      filters=filters(arguments, SEARCH_FILTERS))
+                      offset=page(arguments), filters=filters(arguments, SEARCH_FILTERS))
     if command == 'search':
         return call(command, 'find', words=' '.join(arguments.terms) or None, limit=arguments.limit,
-                    filters=filters(arguments, SEARCH_FILTERS))
+                    offset=page(arguments), filters=filters(arguments, SEARCH_FILTERS))
     if command == 'jobs' and arguments.text:
-        return search(command, arguments.text, target='jobs', limit=arguments.limit,
+        return search(command, arguments.text, target='jobs', limit=arguments.limit, offset=page(arguments),
                       filters=filters(arguments, ('city', 'function')))
     if command == 'jobs':
         return call(command, 'jobs', query=arguments.query, limit=arguments.limit, cursor=arguments.cursor)
@@ -717,7 +752,7 @@ def main(argv=None):
             raise Failure('invalid_arguments', hint='Give an ID, or --text or --file for a text that is not in the library.')
         keys = ('city', 'function', 'min_months') if command == 'match-job' else ('city', 'function')
         return call(command, 'match_job' if command == 'match-job' else 'match_candidate', id=arguments.id.strip(),
-                    limit=arguments.limit, filters=filters(arguments, keys))
+                    limit=arguments.limit, offset=page(arguments), filters=filters(arguments, keys))
     if command == 'tags':
         return call(command, 'tags', kind=arguments.kind)
     if command == 'companies':
