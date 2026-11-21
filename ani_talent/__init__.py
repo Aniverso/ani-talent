@@ -20,7 +20,7 @@ file also runs as `python3 ani_talent.py`.
   ani_talent.py contacts ID               # Contact values.
   ani_talent.py history ID                # The revisions of one candidate.
   ani_talent.py file ID [--out DIR]       # Save the original resume file (PDF or Word).
-  ani_talent.py search [--text TEXT] [WORD...] [--city CODE] [--function CODE]
+  ani_talent.py search [--text TEXT] [WORD...] [--city CITY] [--function FUNCTION]
                        [--min-degree DEGREE] [--min-months N] [--known-only]
                        [--received-from DAY] [--received-to DAY] [--limit N] [--offset N]
                                           # Candidates by meaning (--text), words and filters.
@@ -32,15 +32,16 @@ file also runs as `python3 ani_talent.py`.
                                           # no value for it (listed in unknown); --known-only
                                           # removes them. --offset NEXT: the next page.
   ani_talent.py jobs [--query TEXT] [--limit N] [--cursor JSON]
-  ani_talent.py jobs --text TEXT [--limit N] [--offset N] [--city CODE] [--function CODE]   # Jobs by meaning.
+  ani_talent.py jobs --text TEXT [--limit N] [--offset N] [--city CITY] [--function FUNCTION]   # Jobs by meaning.
   ani_talent.py job ID                    # ID: a job code (AniJ48203715) or a UUID.
-  ani_talent.py match-job JOB_ID [--limit N] [--offset N] [--city CODE] [--function CODE] [--min-months N]
+  ani_talent.py match-job JOB_ID [--limit N] [--offset N] [--city CITY] [--function FUNCTION] [--min-months N]
                        [--known-only]
   ani_talent.py match-job --text TEXT | --file PATH [...]   # A job that is not in the library.
-  ani_talent.py match-candidate CANDIDATE_ID [--limit N] [--offset N] [--city CODE] [--function CODE]
+  ani_talent.py match-candidate CANDIDATE_ID [--limit N] [--offset N] [--city CITY] [--function FUNCTION]
                        [--known-only]
   ani_talent.py match-candidate --text TEXT | --file PATH [...]   # A resume that is not in the library.
-  ani_talent.py tags [--kind city|function]    # The codes for --city and --function.
+  ani_talent.py tags [--kind city|function]    # The cities and functions for --city and --function.
+                                          # A filter takes the name (北京, 后端) or the code (city.beijing).
 
   ani_talent.py company ID                # One company record: names, internal notes (sections and
                                           # hiring_preference), public facts, a sample of the public
@@ -88,13 +89,17 @@ except ImportError:  # Windows: no lock between processes.
     fcntl = None
 
 BASE = 'https://vnpidbfkvfytudqvsjfm.supabase.co'
-VERSION = '0.16.0'
+VERSION = '0.17.0'
 # The publishable key identifies the project. It is not a secret: with no account it reads nothing.
 KEY = 'sb_publishable_WY1XKEoEkXumGKcTTdrRag_SQtvl_AK'
 HOME = Path(os.environ.get('ANI_TALENT_HOME') or Path.home() / '.config' / 'ani-talent')
 REFRESH_BEFORE = 120  # Seconds before the end of a session at which a call gets a new one.
 SIGNALS = ('funding', 'layoff', 'organization', 'product', 'business', 'legal', 'people', 'hiring', 'negative',
            'other')
+# Seconds that a stored reply stays in use on this computer: the access of the account, and
+# the dictionary of city and function codes.
+STATUS_AGE = 300
+TAGS_AGE = 86400
 PLATFORMS = ('xiaohongshu', 'weibo', 'wechat')
 FILE_LIMIT = 20971520
 MATCH_LIMIT = 16000
@@ -240,6 +245,7 @@ def refused(command, status, value):
         return Failure('client_outdated', hint='This version of ani-talent is too old. Run: uv tool upgrade '
                        'ani-talent (with uvx, start the Agent again).')
     if status == 429:  # The message of the database says which limit.
+        forget('status.json')
         window = '30 days' in str(message)
         return Failure('limit_reached', command=command, limit='30_days' if window else 'day',
                        hint='You can read the candidates that you read in the last 30 days. Tell the person.'
@@ -332,6 +338,9 @@ SEARCH_FILTERS = ('city', 'function', 'min_degree', 'min_months', 'include_unkno
 def filters(arguments, names):
     value = {name: getattr(arguments, name) for name in names
              if name != 'include_unknown' and getattr(arguments, name, None) is not None}
+    for kind in ('city', 'function'):
+        if kind in value:
+            value[kind] = tag_code(kind, value[kind])
     if getattr(arguments, 'known_only', None):
         value['include_unknown'] = False
     return value
@@ -354,7 +363,7 @@ OFFSET = {'type': 'integer', 'minimum': 0,
 KNOWN_ONLY = {'type': 'boolean',
               'description': 'Remove the results that have no value for a filter (by default they stay, '
                              'marked in unknown)'}
-CODE = {'type': 'string', 'description': 'A dictionary code from the tool tags, for example city.shanghai'}
+CODE = {'type': 'string', 'description': 'A city or a function: its name (北京, 后端) or its code (city.beijing)'}
 DAY = {'type': 'string', 'pattern': '^[0-9]{4}-[0-9]{2}-[0-9]{2}$',
        'description': 'A day YYYY-MM-DD in China time, for example 2026-11-14'}
 MATCH_TEXT = {'type': 'string', 'maxLength': MATCH_LIMIT,
@@ -482,11 +491,78 @@ ANNOTATIONS = {
     'file': {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True},
 }
 
+def stored_reply(name, seconds, fetch):
+    """A reply that this account got from the database in the last `seconds` on this computer,
+    else a new one. Returns the reply and its age in seconds."""
+    user = (stored_session() or {}).get('user_id')
+    stored = read(name)
+    if (user and isinstance(stored, dict) and stored.get('user_id') == user and stored.get('client') == VERSION
+            and isinstance(stored.get('at'), (int, float)) and 0 <= time.time() - stored['at'] < seconds):
+        return stored['value'], int(time.time() - stored['at'])
+    value = fetch()
+    if user:
+        write(name, {'user_id': user, 'client': VERSION, 'at': time.time(), 'value': value})
+    return value, 0
+
+
+def forget(*names):
+    """Remove stored replies: after a sign-in, a sign-out or a limit failure they can be wrong."""
+    for name in names or ('status.json', 'tags.json'):
+        (HOME / name).unlink(missing_ok=True)
+
+
+def account_status():
+    """The reply of `status` and its age. A limit failure removes the stored reply."""
+    return stored_reply('status.json', STATUS_AGE, lambda: call('status', 'status'))
+
+
+def dictionary(fresh=False):
+    """The city and function codes: a list of {code, kind, label, pattern}."""
+    if fresh:
+        forget('tags.json')
+    value, _ = stored_reply('tags.json', TAGS_AGE, lambda: call('tags', 'tags'))
+    tags = value.get('tags') if isinstance(value, dict) else None
+    return [tag for tag in tags or [] if isinstance(tag, dict) and isinstance(tag.get('code'), str)]
+
+
+def code_of(kind, value, tags):
+    """The code of a city or a function that is given as a code, a label or a name of its pattern."""
+    text = value.strip().lower()
+    for tag in tags:
+        if tag.get('kind') != kind:
+            continue
+        if text in (tag['code'].lower(), str(tag.get('label', '')).lower()):
+            return tag['code']
+        try:
+            if tag.get('pattern') and re.fullmatch(tag['pattern'], text, re.IGNORECASE):
+                return tag['code']
+        except re.error:
+            pass
+    return None
+
+
+def tag_code(kind, value):
+    """A filter value as a code. `北京`, `beijing` and `city.beijing` give `city.beijing`. A value
+    that is no city or function of the dictionary is a failure that lists the values."""
+    try:
+        tags = dictionary()
+        code = code_of(kind, value, tags)
+        if code is None:  # A new code can be absent from the stored dictionary.
+            tags = dictionary(fresh=True)
+            code = code_of(kind, value, tags)
+    except (Failure, OSError):
+        return value  # The dictionary is not available: the database decides.
+    if code is None:
+        raise Failure('invalid_arguments', hint=f'"{value}" is not a {kind} of the library. Use one of: '
+                      + ', '.join(str(tag.get('label') or tag['code']) for tag in tags if tag.get('kind') == kind))
+    return code
+
+
 def access():
     """The commands, limits and use of the account. None when it is not known:
     no session or no network."""
     try:
-        return known(call('status', 'status'))
+        return known(account_status()[0])
     except (Failure, OSError):
         return None
 
@@ -514,11 +590,30 @@ def commands_of(value):
     return [name for name in TOOLS if name not in ('login', 'verify') and usable(name, value)]
 
 
+def named_filters(properties, tags):
+    """The properties with the names of the dictionary in `city` and `function`: an Agent sees the
+    values that it can give, with no call of `tags`."""
+    result = dict(properties)
+    for kind in ('city', 'function'):
+        names = [str(tag.get('label') or tag['code']) for tag in tags if tag.get('kind') == kind]
+        if kind in result and names:
+            result[kind] = {'type': 'string', 'description': f'One {kind}, by its name or its code. The names: '
+                            + ', '.join(names)}
+    return result
+
+
 def tool_list(mine):
     tools = []
+    tags = []
+    if mine is not None:
+        try:
+            tags = dictionary()
+        except (Failure, OSError):
+            pass
     for name, (title, description, properties, required, _, _) in TOOLS.items():
         if not usable(name, mine):
             continue
+        properties = named_filters(properties, tags)
         hints = ANNOTATIONS.get(name, {'readOnlyHint': True})
         tools.append({'name': name, 'title': title, 'description': description,
                       'inputSchema': {'type': 'object', 'properties': properties, 'required': required,
@@ -735,6 +830,7 @@ def main(argv=None):
         if status != 200:
             raise Failure('code_refused', http_status=status)
         session = keep(value)
+        forget()
         return {'status': 'signed_in', 'email': session['email']}
     if command == 'status':
         session = stored_session()
@@ -743,17 +839,20 @@ def main(argv=None):
         result = {'signed_in': True, 'email': session['email'], 'client_version': VERSION,
                   'session_ends_in_seconds': max(0, int(session['expires_at'] - time.time()))}
         try:
-            value = call(command, 'status')
+            value, age = account_status()
         except Failure as failure:  # For example client_outdated or session_ended: say it.
             return {**result, 'access_error': failure.report}
         value = known(value)
+        # `used` is the reply of the database of `used_age_seconds` before (at most STATUS_AGE).
         return {**result, 'commands': commands_of(value),
-                **{key: value[key] for key in ('limits', 'used') if value and key in value}}
+                **{key: value[key] for key in ('limits', 'used') if value and key in value},
+                **({'used_age_seconds': age} if value and 'used' in value else {})}
     if command == 'logout':
         session = stored_session()
         if session:
             request('/auth/v1/logout?scope=local', {}, session['access_token'])
             (HOME / 'session.json').unlink(missing_ok=True)
+        forget()
         return {'status': 'signed_out'}
     if command == 'mcp':
         raise Failure('invalid_arguments', hint='Run `ani-talent mcp` as a command, not as a tool.')
@@ -790,6 +889,8 @@ def main(argv=None):
         return call(command, 'match_job' if command == 'match-job' else 'match_candidate', id=arguments.id.strip(),
                     limit=arguments.limit, offset=page(arguments), filters=filters(arguments, keys))
     if command == 'tags':
+        if arguments.kind is None:
+            return stored_reply('tags.json', TAGS_AGE, lambda: call(command, 'tags'))[0]
         return call(command, 'tags', kind=arguments.kind)
     if command == 'company':
         options = {'platform': arguments.platform, 'kind': arguments.kind, 'text': arguments.text,
