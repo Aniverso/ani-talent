@@ -42,9 +42,14 @@ file also runs as `python3 ani_talent.py`.
   ani_talent.py match-candidate --text TEXT | --file PATH [...]   # A resume that is not in the library.
   ani_talent.py tags [--kind city|function]    # The codes for --city and --function.
 
-  ani_talent.py company ID                # One company record: names, profile sections, newest
-                                          # signals and jobs. ID: a company code (AniC59310427) or a UUID.
+  ani_talent.py company ID                # One company record: names, internal notes (sections and
+                                          # hiring_preference), public facts, a sample of the public
+                                          # opinions, jobs, and coverage (what the record has).
+                                          # ID: a company code (AniC59310427) or a UUID.
+  ani_talent.py company ID --part opinions [--platform P] [--kind K] [--text WORD] [--from DAY]
+                       [--to DAY] [--limit N] [--before N]   # All public opinions of a company, in pages.
   ani_talent.py companies TEXT [--limit N]     # Companies whose name or alias has the text.
+  ani_talent.py companies TEXT --facts [--limit N]   # Public facts of all companies that have the words.
   ani_talent.py signals ID [--kind KIND] [--limit N] [--before JSON]   # The signals of a company.
   ani_talent.py people ID [--current | --past] [--limit N]   # Candidates with an employment at a company.
   ani_talent.py employers CANDIDATE_ID    # The employments of a candidate, with the company of each.
@@ -83,13 +88,14 @@ except ImportError:  # Windows: no lock between processes.
     fcntl = None
 
 BASE = 'https://vnpidbfkvfytudqvsjfm.supabase.co'
-VERSION = '0.15.0'
+VERSION = '0.16.0'
 # The publishable key identifies the project. It is not a secret: with no account it reads nothing.
 KEY = 'sb_publishable_WY1XKEoEkXumGKcTTdrRag_SQtvl_AK'
 HOME = Path(os.environ.get('ANI_TALENT_HOME') or Path.home() / '.config' / 'ani-talent')
 REFRESH_BEFORE = 120  # Seconds before the end of a session at which a call gets a new one.
 SIGNALS = ('funding', 'layoff', 'organization', 'product', 'business', 'legal', 'people', 'hiring', 'negative',
            'other')
+PLATFORMS = ('xiaohongshu', 'weibo', 'wechat')
 FILE_LIMIT = 20971520
 MATCH_LIMIT = 16000
 # MCP protocol versions that this server answers. A client that asks for another version gets the newest.
@@ -410,8 +416,11 @@ TOOLS = {
              {'text': {'type': 'string', 'maxLength': 400}, 'query': {'type': 'string'}, 'city': CODE,
               'function': CODE, 'limit': LIMIT, 'offset': OFFSET}, [], [],
              ['text', 'query', 'city', 'function', 'limit', 'offset']),
-    'job': ('Read one job', 'One job, with its job code and the code of its company.', {'id': JOB}, ['id'], ['id'],
-            []),
+    'job': ('Read one job', 'One job, with its job code. `company_brief` is its company in a few lines: the '
+            'code, a short overview, `hiring_preference` (what this company wants in a person: read it before '
+            'you select candidates) and the number of public facts and opinions. Read the tool company with '
+            '`company_ani_id` for the full record. A job with no `company_brief` has no company record.',
+            {'id': JOB}, ['id'], ['id'], []),
     'match-job': ('Candidates for a job', 'The candidates for one job, by meaning, best first. A list to examine, '
                   'not a decision. Give id for a job of the library, or text (or file) for a job that is not in '
                   'it: the title, the duties and the requirements of the job. A filter keeps a candidate with no '
@@ -428,12 +437,28 @@ TOOLS = {
                         ['text', 'file', 'limit', 'city', 'function', 'known-only', 'offset']),
     'tags': ('City and function codes', 'The city and function codes.',
              {'kind': {'type': 'string', 'enum': ['city', 'function']}}, [], [], ['kind']),
-    'company': ('Read one company', 'The record of one company: names, the current profile sections (overview, '
-                'business, funding, finance, organization, other), the 10 newest signals and its jobs. Read it '
-                'before you work on a job of that company.', {'id': COMPANY}, ['id'], ['id'], []),
+    'company': ('Read one company', 'All that the library knows about one company, in one call. Three layers: '
+                '(1) internal notes: `sections` (overview and others) and `hiring_preference` (what the company '
+                'wants in a person: degree, level, background, pay, interview focus); (2) `public`: facts from '
+                'public pages, each with sources and dates; (3) `opinions`: the number of public posts and '
+                'articles about the company (Xiaohongshu, Weibo, WeChat) and the 3 newest, each with its link. '
+                '`coverage` says which layers have data: an empty layer means that the library has nothing, not '
+                'that your account cannot read it. Opinions are a sample of what people say, not a fact. '
+                'Set part to `opinions` for all opinions and their comments, in pages (`before` = `next` of the '
+                'page before); platform, kind, text, from and to are filters of that list.',
+                {'id': COMPANY, 'part': {'type': 'string', 'enum': ['opinions']},
+                 'platform': {'type': 'string', 'enum': list(PLATFORMS)},
+                 'kind': {'type': 'string', 'enum': ['post', 'article', 'comment']},
+                 'text': {'type': 'string', 'maxLength': 200, 'description': 'A word that the title or the body has'},
+                 'from': DAY, 'to': DAY, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 100},
+                 'before': {'type': 'integer', 'minimum': 1}}, ['id'], ['id'],
+                ['part', 'platform', 'kind', 'text', 'from', 'to', 'limit', 'before']),
     'companies': ('Find companies', 'Companies whose name or alias has the text, with the number of sections, '
-                  'signals and open jobs.', {'text': {'type': 'string', 'maxLength': 100}, 'limit': LIMIT},
-                  ['text'], ['text'], ['limit']),
+                  'public sections, signals and open jobs. Set facts true to search the content: the public '
+                  'facts of all companies that have the words of the text (for example a product or an '
+                  'industry), each with its company code.',
+                  {'text': {'type': 'string', 'maxLength': 100}, 'facts': {'type': 'boolean'}, 'limit': LIMIT},
+                  ['text'], ['text'], ['facts', 'limit']),
     'signals': ('Signals of a company', 'The signals (news and events) of one company, newest first. `before` is '
                 'the `next` of the page before.',
                 {'id': COMPANY, 'kind': {'type': 'string', 'enum': list(SIGNALS)},
@@ -613,8 +638,18 @@ def parser():
         commands.add_parser(name)
     # `--write` stays accepted for the configurations of older versions. It changes nothing.
     commands.add_parser('mcp').add_argument('--write', action='store_true', help=argparse.SUPPRESS)
-    for name in ('candidate', 'contacts', 'history', 'job', 'text', 'company', 'employers'):
+    for name in ('candidate', 'contacts', 'history', 'job', 'text', 'employers'):
         commands.add_parser(name).add_argument('id')
+    command = commands.add_parser('company')
+    command.add_argument('id')
+    command.add_argument('--part', choices=('opinions',))
+    command.add_argument('--platform', choices=PLATFORMS)
+    command.add_argument('--kind', choices=('post', 'article', 'comment'))
+    command.add_argument('--text')
+    command.add_argument('--from', dest='day_from', metavar='DAY')
+    command.add_argument('--to', dest='day_to', metavar='DAY')
+    command.add_argument('--limit', type=int)
+    command.add_argument('--before', type=int)
     command = commands.add_parser('candidates')
     command.add_argument('ids', nargs='+')
     command.add_argument('--text', action='store_true')
@@ -660,6 +695,7 @@ def parser():
     commands.add_parser('tags').add_argument('--kind', choices=('city', 'function'))
     command = commands.add_parser('companies')
     command.add_argument('text')
+    command.add_argument('--facts', action='store_true')
     command.add_argument('--limit', type=int, default=20)
     command = commands.add_parser('signals')
     command.add_argument('id')
@@ -677,7 +713,7 @@ def parser():
 
 # Commands that are one database request with the ID of the command: command -> tool.
 ONE = {'candidate': 'candidate', 'text': 'text', 'contacts': 'contacts', 'history': 'history',
-       'employers': 'employers', 'job': 'job', 'company': 'company'}
+       'employers': 'employers', 'job': 'job'}
 
 
 def main(argv=None):
@@ -755,6 +791,17 @@ def main(argv=None):
                     limit=arguments.limit, offset=page(arguments), filters=filters(arguments, keys))
     if command == 'tags':
         return call(command, 'tags', kind=arguments.kind)
+    if command == 'company':
+        options = {'platform': arguments.platform, 'kind': arguments.kind, 'text': arguments.text,
+                   'from': arguments.day_from, 'to': arguments.day_to, 'limit': arguments.limit,
+                   'before': arguments.before}
+        if arguments.part == 'opinions':
+            return call(command, 'opinions', id=arguments.id.strip(), **options)
+        if any(value is not None for value in options.values()):
+            raise Failure('invalid_arguments', hint='The filters are for --part opinions.')
+        return call(command, 'company', id=arguments.id.strip())
+    if command == 'companies' and arguments.facts:
+        return call(command, 'facts', text=arguments.text, limit=arguments.limit)
     if command == 'companies':
         return call(command, 'companies', text=arguments.text, limit=arguments.limit)
     if command == 'signals':
