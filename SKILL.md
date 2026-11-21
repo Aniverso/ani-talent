@@ -55,13 +55,13 @@ Your account can use some of these commands; `status` lists them (`commands`).
 | Contact values | `contacts ID` |
 | Revisions of a candidate | `history ID` |
 | The original resume file (PDF or Word), saved as `<Ani ID>.pdf` | `file ID [--out DIR]` |
-| Candidates by meaning, words and filters | `search [--text "TEXT"] [WORD...] [--city CODE] [--function CODE] [--min-degree DEGREE] [--min-months N] [--received-from DAY] [--received-to DAY]` |
+| Candidates by meaning, words and filters | `search [--text "TEXT"] [WORD...] [--city CITY] [--function FUNCTION] [--min-degree DEGREE] [--min-months N] [--received-from DAY] [--received-to DAY]` |
 | Jobs | `jobs [--query TEXT] [--limit N]`, `jobs --text "TEXT"` (by meaning), `job ID` |
-| Candidates for a job | `match-job JOB_ID [--limit N] [--city CODE] [--function CODE]` |
+| Candidates for a job | `match-job JOB_ID [--limit N] [--city CITY] [--function FUNCTION]` |
 | Candidates for a job that is not in the database | `match-job (--text TEXT \| --file PATH) [...]` |
 | Jobs for a candidate | `match-candidate CANDIDATE_ID [--limit N]` |
 | Jobs for a person who is not in the database | `match-candidate (--text TEXT \| --file PATH) [...]` |
-| Codes for `--city` and `--function` | `tags [--kind city]` |
+| The cities and functions for `--city` and `--function` | `tags [--kind city]` |
 | One company record: internal notes, hiring preference, public facts, a sample of the opinions, jobs | `company ID` |
 | All public opinions of a company (posts, articles, comments) | `company ID --part opinions [--platform xiaohongshu\|weibo\|wechat] [--kind post\|article\|comment] [--text WORD] [--from DAY] [--to DAY] [--limit N] [--before N]` |
 | Companies by name | `companies TEXT [--limit N]` |
@@ -133,6 +133,12 @@ An employment of a candidate belongs to a company when its company text is a nam
 of the company. `people ID` gives these candidates (summaries with no name; `--past` gives the
 candidates with no current employment there), and `employers CANDIDATE_ID` gives the company of
 each employment.
+
+`--city` and `--function` take the name of a city or a function (`--city 北京`, `--function 后端`)
+or its code (`city.beijing`). You do not have to read `tags` first: as MCP tools, the filters
+list their names, and a value that is not in the dictionary gives a failure that lists the names.
+The library has a fixed list of cities and functions. A city that is not in the list is not a
+filter: put it in the search text.
 
 `search` gives a list of summaries (title, company, degree, months, city and function
 codes), with no name. `--text` is one sentence that says which person you look for; the
@@ -208,8 +214,9 @@ asks before a tool that is not read-only (`login`, `verify`, and `file`, which s
 - `not_available` means that your account cannot use the command, or that there is no such
   command. Tell the person; do not try another way.
 - `status` shows the commands that you can use (`commands`), your limits (`limits`) and what
-  you used (`used`: different candidates today and in the last 30 days). Read it before a
-  large task.
+  you used (`used`: different candidates today and in the last 30 days). Read it one time
+  before a large task, not before each command: this computer keeps the reply for 5 minutes
+  (`used_age_seconds` is its age), and a limit failure says which limit is reached.
 - Do not copy many candidates or contact values into a file, a message or another
   system. This package has no export. Give the person the candidates that the task needs.
   Only an admin can read contacts in bulk.
