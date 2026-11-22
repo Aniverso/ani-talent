@@ -1,6 +1,6 @@
 ---
 name: ani-talent
-description: Read the Ani talent database with your own account. Use to look up a candidate, read contact values, save an original resume file, search candidates by words, list and read jobs, match jobs and candidates, and read company records (internal notes, hiring preference, public facts and public opinions). Your account decides which commands work. Not for changes to candidates, jobs or companies.
+description: Read the Ani talent database with your own account. Use to look up a candidate, read contact values, save an original resume file, search candidates by words, list and read jobs, match jobs and candidates, read company records (internal notes, hiring preference, public facts and public opinions), and claim new people from the match pool for calls. Your account decides which commands work. Not for changes to candidates, jobs or companies.
 ---
 
 # Ani talent database
@@ -49,6 +49,7 @@ This part and the next ones show the commands of your account only when you read
 | Find companies that do something | `companies` with the facts option |
 | Know who worked at a company | `people` |
 | Call or write to a person | `contacts`, only for the persons that the task needs |
+| Give new people to a colleague who calls them | `pool` for the numbers, `pool-claim` with the name of the colleague, then `pool-report` with the result of each call |
 | Get the original resume file of a person | `file` |
 | Know what the account can do and its limits | `status` |
 
@@ -79,6 +80,10 @@ This part and the next ones show the commands of your account only when you read
 | Public facts of all companies by words | `companies TEXT --facts [--limit N]` |
 | Candidates with an employment at a company | `people ID [--current \| --past] [--limit N]` |
 | Employments of a candidate, with their companies | `employers CANDIDATE_ID` |
+| The match pool: people that you can claim now, and how many more you can claim | `pool` |
+| Claim people of the match pool, newest first, with phones and their best jobs | `pool-claim [--count N] [--assignee NAME]` |
+| The result of one claim | `pool-report --claim N --result yes\|no [--reason TEXT] [--job JOB_UUID]` |
+| Your claims with no result yet | `pool-claims` |
 
 <!-- for: candidate -->
 Each candidate has an Ani ID, such as `Ani48203715`. The IDs are not in sequence. An `ID` of a
@@ -211,6 +216,26 @@ candidates with no current employment there).
 `employers CANDIDATE_ID` gives the company of each employment of a candidate, when the company
 has a record.
 
+<!-- for: pool pool-claim -->
+The match pool holds the people that came into the library in the last 7 days, each matched with
+the best open jobs. It is for calls: a person tells the people about the jobs. `pool` says how
+many people you can claim now (`claimable`) and how many more you can claim: `cap_left` (claims
+with no result) and `daily_left` (today). `pool-claim` gives the newest people first; for each:
+`claim_id`, `name`, `phones`, `intro` (one line), `expires_at` and `jobs` (at most 3, best
+first). A job has `verdict` (0 to 3) and `reason` when a model judged the pair; a job with no
+verdict is a match by meaning only. Give `--assignee` the name of the colleague who calls them.
+
+A claimed person is yours for 24 hours: no other account gets the person. Claim only the people
+that will get a call now. Each phone of a claim is a recorded read.
+
+<!-- for: pool-report -->
+Give each claim a result with `pool-report`. `--result yes` when the person wants one of the
+jobs (give `--job` with its `job_id`): the person leaves the pool. `--result no` when not: the
+jobs that the claim showed are removed, and the person can come back with other jobs. Give a
+short `--reason`, for `no` most of all: the results make the matches better. A claim with no
+result ends after 24 hours and the person goes back to the pool. `rejected` lists a claim that
+has a result already or that is not yours.
+
 <!-- for: all -->
 ## As MCP tools
 
@@ -235,9 +260,9 @@ tools that the account can use, and its start text names only those tools. Befor
 lists `login`, `verify`, `status` and `guide`. A client reads the list at its start: start the
 client again after a sign-in or a change of the account.
 
-The tools only read the database. Each tool has MCP annotations: a client such as Claude Code
-asks before a tool that is not read-only (`login`, `verify`, and a tool that saves a file on
-this computer).
+Most tools only read the database. Each tool has MCP annotations: a client such as Claude Code
+asks before a tool that is not read-only (`login`, `verify`, a tool that saves a file on this
+computer, and a tool that changes a record).
 
 ## Rules
 

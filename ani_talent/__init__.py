@@ -53,6 +53,16 @@ file also runs as `python3 ani_talent.py`.
   ani_talent.py companies TEXT --facts [--limit N]   # Public facts of all companies that have the words.
   ani_talent.py people ID [--current | --past] [--limit N]   # Candidates with an employment at a company.
   ani_talent.py employers CANDIDATE_ID    # The employments of a candidate, with the company of each.
+
+  ani_talent.py pool                      # The match pool: the people that you can claim now, and
+                                          # how many you can still claim (open claims, today).
+  ani_talent.py pool-claim [--count N] [--assignee NAME]   # Claim N people (1 to 50, default 10),
+                                          # newest first: name, phones, a one-line introduction and
+                                          # their best jobs. NAME: the colleague who calls them.
+  ani_talent.py pool-report --claim N --result yes|no [--reason TEXT] [--job JOB_UUID]
+                                          # The result of one claim. yes: the person leaves the pool;
+                                          # no: the shown jobs are removed and the person gets others.
+  ani_talent.py pool-claims               # Your claims with no result yet, the first to end first.
   ani_talent.py mcp                       # A Model Context Protocol server on stdin and stdout.
 
 For an Agent that uses MCP (Codex, Claude Code, Cursor and others), add this server
@@ -63,7 +73,8 @@ commands of the signed-in account. Do not try commands to find out.
 Output is JSON on stdout. A failure is JSON on stderr with exit code 1. `error` says what
 to do: `not_available` = your account cannot use the command, or there is no such command;
 `limit_reached` = a daily limit is reached (`limit`: `day` starts again at 00:00
-Asia/Shanghai; `30_days` counts the different candidates of the last 30 days);
+Asia/Shanghai; `30_days` counts the different candidates of the last 30 days;
+`open_claims` = report the results of your claims first);
 `not_signed_in` or `session_ended` = sign in again; `client_outdated` = run
 `uv tool upgrade ani-talent`.
 Each read is recorded with your account. The files are in `~/.config/ani-talent/`
@@ -88,7 +99,7 @@ except ImportError:  # Windows: no lock between processes.
     fcntl = None
 
 BASE = 'https://vnpidbfkvfytudqvsjfm.supabase.co'
-VERSION = '0.18.0'
+VERSION = '0.19.0'
 # The publishable key identifies the project. It is not a secret: with no account it reads nothing.
 KEY = 'sb_publishable_WY1XKEoEkXumGKcTTdrRag_SQtvl_AK'
 HOME = Path(os.environ.get('ANI_TALENT_HOME') or Path.home() / '.config' / 'ani-talent')
@@ -245,6 +256,10 @@ def refused(command, status, value):
                        'ani-talent (with uvx, start the Agent again).')
     if status == 429:  # The message of the database says which limit.
         forget('status.json')
+        if 'claim cap' in str(message):
+            return Failure('limit_reached', command=command, limit='open_claims',
+                           hint='Too many of your claims have no result. Report results with pool-report; a claim '
+                           'with no result ends after 24 hours. Tell the person.')
         window = '30 days' in str(message)
         return Failure('limit_reached', command=command, limit='30_days' if window else 'day',
                        hint='You can read the candidates that you read in the last 30 days. Tell the person.'
@@ -474,6 +489,29 @@ TOOLS = {
                ['id'], ['limit']),
     'employers': ('Employers of a candidate', 'The employments of one candidate, each with the code and the name '
                   'of its company if the company has a record.', {'id': ID}, ['id'], ['id'], []),
+    'pool': ('Match pool numbers', 'The match pool: new people that are matched with open jobs, for calls. '
+             '`claimable` is the number of people that you can claim now, `new_today` of them came in today. '
+             '`cap_left` and `daily_left` say how many more you can claim; `claim_batch` is the most for one claim.',
+             {}, [], [], []),
+    'pool-claim': ('Claim people from the match pool', 'Claim people from the match pool, the newest first. '
+                   'For each person: `name`, `phones`, `intro` (one line) and `jobs` (at most 3, best first; '
+                   '`verdict` 0 to 3 and `reason` when a model judged the pair). A claimed person is yours for '
+                   '24 hours and no other account gets the person. count: 1 to 50. assignee: the name of the '
+                   'colleague who calls them. Claim only the people that will get a call now; give each claim a '
+                   'result with pool-report.',
+                   {'count': {'type': 'integer', 'minimum': 1, 'maximum': 50},
+                    'assignee': {'type': 'string', 'maxLength': 200}}, [], [], ['count', 'assignee']),
+    'pool-report': ('Report a match pool result', 'The result of one claim (`claim_id` of pool-claim): yes when '
+                    'the person wants one of the jobs (give job, the job_id), no when not. yes: the person leaves '
+                    'the pool. no: the jobs that the claim showed are removed and the person can come back with '
+                    'other jobs. reason: a short text, for no most of all. `rejected` lists a claim that has a '
+                    'result already, or is not yours.',
+                    {'claim': {'type': 'integer', 'minimum': 1}, 'result': {'type': 'string', 'enum': ['yes', 'no']},
+                     'reason': {'type': 'string', 'maxLength': 1000},
+                     'job': {'type': 'string', 'description': 'The job_id (a UUID) of the job, for yes'}},
+                    ['claim', 'result'], [], ['claim', 'result', 'reason', 'job']),
+    'pool-claims': ('My open match pool claims', 'Your claims with no result yet, the first to end first, with the '
+                    'person, the jobs and the colleague of each claim. No phone: a claim gave it.', {}, [], [], []),
 
 }
 # MCP annotations of the tools that change something on this computer or the server. Each other tool
@@ -482,6 +520,9 @@ ANNOTATIONS = {
     'login': {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': False},
     'verify': {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': False},
     'file': {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True},
+    # A claim locks people for 24 hours and reads their phones; a report removes jobs from the pool.
+    'pool-claim': {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': False},
+    'pool-report': {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': False},
 }
 
 def stored_reply(name, seconds, fetch):
@@ -851,6 +892,16 @@ def parser():
     group.add_argument('--current', dest='current', action='store_const', const=True, default=None)
     group.add_argument('--past', dest='current', action='store_const', const=False)
     command.add_argument('--limit', type=int, default=20)
+    for name in ('pool', 'pool-claims'):
+        commands.add_parser(name)
+    command = commands.add_parser('pool-claim')
+    command.add_argument('--count', type=int, default=10)
+    command.add_argument('--assignee')
+    command = commands.add_parser('pool-report')
+    command.add_argument('--claim', type=int, required=True)
+    command.add_argument('--result', choices=('yes', 'no'), required=True)
+    command.add_argument('--reason')
+    command.add_argument('--job')
     return root
 
 
@@ -953,6 +1004,22 @@ def main(argv=None):
         return call(command, 'facts', text=arguments.text, limit=arguments.limit)
     if command == 'companies':
         return call(command, 'companies', text=arguments.text, limit=arguments.limit)
+    if command in ('pool', 'pool-claims'):
+        return call(command, command.replace('-', '_'))
+    if command == 'pool-claim':
+        assignee = (arguments.assignee or '').strip() or None
+        if not 1 <= arguments.count <= 50 or (assignee and len(assignee) > 200):
+            raise Failure('invalid_arguments', hint='--count is 1 to 50; --assignee has 200 characters at most.')
+        return call(command, 'pool_claim', count=arguments.count, assignee=assignee)
+    if command == 'pool-report':
+        job = (arguments.job or '').strip().lower() or None
+        if arguments.claim < 1 or (job and not re.fullmatch(r'[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}', job)) \
+                or (job and arguments.result != 'yes'):
+            raise Failure('invalid_arguments', hint='--claim is the claim_id of pool-claim; --job is the job_id '
+                          '(a UUID) of a job that the claim showed, for --result yes only.')
+        result = {'claim_id': arguments.claim, 'result': arguments.result,
+                  'reason': (arguments.reason or '').strip() or None, 'job_id': job}
+        return call(command, 'pool_report', results=[{key: value for key, value in result.items() if value is not None}])
     if command == 'signals':
         return call(command, 'signals', id=arguments.id, kind=arguments.kind, limit=arguments.limit,
                     before=arguments.before)
