@@ -147,6 +147,14 @@ groups, so the groups do not add up to the pool. `search --count-by direction_gr
 other filter shows what the library has. Give a band as a band ("50 to 199 people"), not as a
 number.
 
+A filter keeps the people with no value for it, so with `--city 北京` the pool also has the
+people whose resume gives no city: 10,799 people, of whom 2,977 are known to be in 北京. The
+result then has `pool_note`. For a question of "how many", search again with `--known-only`
+and give the two numbers ("2,977 people are in 北京; 7,822 more have no city in the resume").
+
+Each result that has codes also has `labels`: the name of each code in it
+(`"direction.quantum_hardware": "量子计算硬件"`). Use the names in an answer, not the codes.
+
 `--received-from DAY` and `--received-to DAY` (`YYYY-MM-DD`, China time, both days included)
 keep only candidates with a resume that came into the library in those days, for example the
 resumes of one weekend. One of the two alone is permitted, and the two dates alone are a
