@@ -99,7 +99,7 @@ except ImportError:  # Windows: no lock between processes.
     fcntl = None
 
 BASE = 'https://vnpidbfkvfytudqvsjfm.supabase.co'
-VERSION = '0.19.0'
+VERSION = '0.20.0'
 # The publishable key identifies the project. It is not a secret: with no account it reads nothing.
 KEY = 'sb_publishable_WY1XKEoEkXumGKcTTdrRag_SQtvl_AK'
 HOME = Path(os.environ.get('ANI_TALENT_HOME') or Path.home() / '.config' / 'ani-talent')
@@ -346,13 +346,15 @@ def save_file(arguments):
             'bytes': meta['bytes'], 'sha256': meta['sha256']}
 
 
-SEARCH_FILTERS = ('city', 'function', 'min_degree', 'min_months', 'include_unknown', 'received_from', 'received_to')
+SEARCH_FILTERS = ('city', 'function', 'direction', 'industry', 'count_by', 'min_degree', 'min_months',
+                  'include_unknown', 'received_from', 'received_to')
+COUNT_BY = ('direction_group', 'direction', 'industry', 'city', 'function', 'degree')
 
 
 def filters(arguments, names):
     value = {name: getattr(arguments, name) for name in names
              if name != 'include_unknown' and getattr(arguments, name, None) is not None}
-    for kind in ('city', 'function'):
+    for kind in ('city', 'function', 'direction', 'industry'):
         if kind in value:
             value[kind] = tag_code(kind, value[kind])
     if getattr(arguments, 'known_only', None):
@@ -378,11 +380,18 @@ KNOWN_ONLY = {'type': 'boolean',
               'description': 'Remove the results that have no value for a filter (by default they stay, '
                              'marked in unknown)'}
 CODE = {'type': 'string', 'description': 'A city or a function: its name (北京, 后端) or its code (city.beijing)'}
+DIRECTION = {'type': 'string', 'description': 'A field of work: a group (量子, 具身智能) or one direction of a group '
+             '(量子计算硬件), by its name, an alias or its code. `tags` lists them'}
+INDUSTRY = {'type': 'string', 'description': 'The business of an employer of the person (半导体), by its name, an '
+            'alias or its code. `tags` lists them'}
 DAY = {'type': 'string', 'pattern': '^[0-9]{4}-[0-9]{2}-[0-9]{2}$',
        'description': 'A day YYYY-MM-DD in China time, for example 2026-11-14'}
 MATCH_TEXT = {'type': 'string', 'maxLength': MATCH_LIMIT,
               'description': 'The text of a job or a resume that is not in the library'}
 MATCH_FILE = {'type': 'string', 'description': 'A UTF-8 text file on this computer with that text (not PDF or Word)'}
+TAG_KINDS = ('city', 'function', 'direction_group', 'direction', 'industry')
+# A filter that takes tags of more than one kind, the first kind first.
+FILTER_KINDS = {'direction': ('direction_group', 'direction')}
 # MCP tool: (title, description, properties, required, positional arguments, options).
 TOOLS = {
     'login': ('Sign in: send a code', 'Send a sign-in code to the mailbox of the account.',
@@ -425,15 +434,24 @@ TOOLS = {
                'them. received_from and received_to (YYYY-MM-DD, China time, both days '
                'included) keep only candidates with a resume that came into the library in those days; each '
                'result has received_at. The result can have filtered_total: the number of candidates that fit the '
-               'filters. When the result has next, call again with offset = next for the next page.',
+               'filters. When the result has next, call again with offset = next for the next page. direction '
+               'and industry are codes of a fixed table that a model gave each person from the resume: use them '
+               'for a question about a field (量子, 具身智能, 芯片), where a word finds each resume that only names '
+               'it; each candidate has direction_codes and industry_codes. With a filter the result has pool_size: '
+               'the band of the number of candidates that fit the filters (0, 1-9, 10-49, 50-199, 200-999, 1000+; '
+               'some accounts get count too); the text and the words do not change it. count_by gives groups: '
+               'the bands of that pool by one part, the largest first — use it to see what the library has, '
+               'with or with no other filter. related_directions: directions near a group that the group does '
+               'not count; search them apart.',
                {'text': {'type': 'string', 'maxLength': 400}, 'terms': {'type': 'array', 'items': {'type': 'string'},
                                                                          'maxItems': 16},
-                'city': CODE, 'function': CODE,
+                'city': CODE, 'function': CODE, 'direction': DIRECTION, 'industry': INDUSTRY,
+                'count_by': {'type': 'string', 'enum': list(COUNT_BY)},
                 'min_degree': {'type': 'string', 'enum': ['high_school', 'associate', 'bachelor', 'master', 'doctor']},
                 'min_months': {'type': 'integer', 'minimum': 0}, 'known_only': KNOWN_ONLY,
                 'received_from': DAY, 'received_to': DAY, 'limit': LIMIT, 'offset': OFFSET}, [], ['terms'],
-               ['text', 'city', 'function', 'min-degree', 'min-months', 'known-only', 'received-from',
-                'received-to', 'limit', 'offset']),
+               ['text', 'city', 'function', 'direction', 'industry', 'count-by', 'min-degree', 'min-months',
+                'known-only', 'received-from', 'received-to', 'limit', 'offset']),
     'jobs': ('List or search jobs', 'Jobs. With text: by meaning, best first (offset = next gives the next page). '
              'With query or nothing: newest first.',
              {'text': {'type': 'string', 'maxLength': 400}, 'query': {'type': 'string'}, 'city': CODE,
@@ -458,8 +476,10 @@ TOOLS = {
                         {'id': ID, 'text': MATCH_TEXT, 'file': MATCH_FILE, 'limit': LIMIT, 'city': CODE,
                          'function': CODE, 'known_only': KNOWN_ONLY, 'offset': OFFSET}, [], ['id'],
                         ['text', 'file', 'limit', 'city', 'function', 'known-only', 'offset']),
-    'tags': ('City and function codes', 'The city and function codes.',
-             {'kind': {'type': 'string', 'enum': ['city', 'function']}}, [], [], ['kind']),
+    'tags': ('Tag table', 'The codes of the library: city, function, direction_group, direction and industry. '
+             'A direction has its group (parent), a definition, what it does not include (excludes) and aliases; '
+             'a group can have related directions of other groups.',
+             {'kind': {'type': 'string', 'enum': list(TAG_KINDS)}}, [], [], ['kind']),
     'company': ('Read one company', 'All that the library knows about one company, in one call. Three layers: '
                 '(1) internal notes: `sections` (overview and others) and `hiring_preference` (what the company '
                 'wants in a person: degree, level, background, pay, interview focus); (2) `public`: facts from '
@@ -495,7 +515,7 @@ TOOLS = {
              {}, [], [], []),
     'pool-claim': ('Claim people from the match pool', 'Claim people from the match pool, the newest first. '
                    'For each person: `name`, `phones`, `intro` (one line) and `jobs` (at most 3, best first; '
-                   '`verdict` 0 to 3 and `reason` when a model judged the pair). A claimed person is yours for '
+                   '`verdict` 1 to 3 and `reason`: a model judged the pair worth a call). A claimed person is yours for '
                    '24 hours and no other account gets the person. count: 1 to 50. assignee: the name of the '
                    'colleague who calls them. Claim only the people that will get a call now; give each claim a '
                    'result with pool-report.',
@@ -551,7 +571,9 @@ def account_status():
 
 
 def dictionary(fresh=False):
-    """The city and function codes: a list of {code, kind, label, pattern}."""
+    """The tag table: a list of {code, kind, label, pattern} for a city or a function, and of
+    {code, kind, label, parent, definition, excludes, aliases, related} for a direction group, a
+    direction or an industry."""
     if fresh:
         forget('tags.json')
     value, _ = stored_reply('tags.json', TAGS_AGE, lambda: call('tags', 'tags'))
@@ -559,25 +581,33 @@ def dictionary(fresh=False):
     return [tag for tag in tags or [] if isinstance(tag, dict) and isinstance(tag.get('code'), str)]
 
 
+def squeezed(text):
+    return ''.join(str(text).lower().split())
+
+
 def code_of(kind, value, tags):
-    """The code of a city or a function that is given as a code, a label or a name of its pattern."""
+    """The code of a tag that is given as a code, a label, an alias or a name of its pattern.
+    For a direction, a group comes before a direction with the same name."""
     text = value.strip().lower()
-    for tag in tags:
-        if tag.get('kind') != kind:
-            continue
-        if text in (tag['code'].lower(), str(tag.get('label', '')).lower()):
-            return tag['code']
-        try:
-            if tag.get('pattern') and re.fullmatch(tag['pattern'], text, re.IGNORECASE):
+    for part in FILTER_KINDS.get(kind, (kind,)):
+        for tag in tags:
+            if tag.get('kind') != part:
+                continue
+            names = [tag['code'], tag.get('label', '')] + [name for name in tag.get('aliases') or []]
+            if squeezed(text) in (squeezed(name) for name in names if name):
                 return tag['code']
-        except re.error:
-            pass
+            try:
+                if tag.get('pattern') and re.fullmatch(tag['pattern'], text, re.IGNORECASE):
+                    return tag['code']
+            except re.error:
+                pass
     return None
 
 
 def tag_code(kind, value):
-    """A filter value as a code. `北京`, `beijing` and `city.beijing` give `city.beijing`. A value
-    that is no city or function of the dictionary is a failure that lists the values."""
+    """A filter value as a code. `北京`, `beijing` and `city.beijing` give `city.beijing`; `量子信息`
+    gives `direction_group.quantum`. A value that is no tag of the dictionary is a failure that
+    lists the values."""
     try:
         tags = dictionary()
         code = code_of(kind, value, tags)
@@ -587,9 +617,28 @@ def tag_code(kind, value):
     except (Failure, OSError):
         return value  # The dictionary is not available: the database decides.
     if code is None:
+        first = FILTER_KINDS.get(kind, (kind,))[0]
+        more = ', or one direction of a group: `tags --kind direction` lists them' if kind == 'direction' else ''
         raise Failure('invalid_arguments', hint=f'"{value}" is not a {kind} of the library. Use one of: '
-                      + ', '.join(str(tag.get('label') or tag['code']) for tag in tags if tag.get('kind') == kind))
+                      + ', '.join(str(tag.get('label') or tag['code']) for tag in tags if tag.get('kind') == first)
+                      + more)
     return code
+
+
+def with_related(result, chosen):
+    """For a search by a direction group: the directions of other groups that are near it."""
+    code = chosen.get('direction') or ''
+    if not isinstance(result, dict) or not code.startswith('direction_group.'):
+        return result
+    try:
+        tags = dictionary()
+    except (Failure, OSError):
+        return result
+    label = {tag['code']: tag.get('label') for tag in tags}
+    related = next((tag.get('related') or [] for tag in tags if tag['code'] == code), [])
+    if not related:
+        return result
+    return {**result, 'related_directions': [{'code': item, 'label': label.get(item)} for item in related]}
 
 
 def access():
@@ -691,6 +740,14 @@ def named_filters(properties, tags):
         if kind in result and names:
             result[kind] = {'type': 'string', 'description': f'One {kind}, by its name or its code. The names: '
                             + ', '.join(names)}
+    for kind, first in (('direction', 'direction_group'), ('industry', 'industry')):
+        names = [str(tag.get('label') or tag['code']) for tag in tags if tag.get('kind') == first]
+        if kind in result and names:
+            text = result[kind]['description'].replace(' `tags` lists them', '')
+            result[kind] = {'type': 'string', 'description': text + (' The groups: ' if kind == 'direction'
+                            else ' The names: ') + ', '.join(names)
+                            + ('. `tags` with kind direction lists the directions of each group'
+                               if kind == 'direction' else '')}
     return result
 
 
@@ -845,6 +902,9 @@ def parser():
     command.add_argument('--text')
     command.add_argument('--city')
     command.add_argument('--function')
+    command.add_argument('--direction')
+    command.add_argument('--industry')
+    command.add_argument('--count-by', dest='count_by', choices=COUNT_BY)
     command.add_argument('--min-degree', dest='min_degree',
                          choices=('high_school', 'associate', 'bachelor', 'master', 'doctor'))
     command.add_argument('--min-months', dest='min_months', type=int)
@@ -876,7 +936,7 @@ def parser():
         command.add_argument('--offset', type=int)
         if name == 'match-job':
             command.add_argument('--min-months', dest='min_months', type=int)
-    commands.add_parser('tags').add_argument('--kind', choices=('city', 'function'))
+    commands.add_parser('tags').add_argument('--kind', choices=TAG_KINDS)
     command = commands.add_parser('companies')
     command.add_argument('text')
     command.add_argument('--facts', action='store_true')
@@ -968,12 +1028,16 @@ def main(argv=None):
         return {**value, 'missing': missing} if missing else value
     if command == 'file':
         return save_file(arguments)
-    if command == 'search' and arguments.text:
-        return search(command, arguments.text, words=' '.join(arguments.terms) or None, limit=arguments.limit,
-                      offset=page(arguments), filters=filters(arguments, SEARCH_FILTERS))
     if command == 'search':
-        return call(command, 'find', words=' '.join(arguments.terms) or None, limit=arguments.limit,
-                    offset=page(arguments), filters=filters(arguments, SEARCH_FILTERS))
+        chosen = filters(arguments, SEARCH_FILTERS)
+        words = ' '.join(arguments.terms) or None
+        if arguments.text:
+            found = search(command, arguments.text, words=words, limit=arguments.limit, offset=page(arguments),
+                           filters=chosen)
+        else:
+            found = call(command, 'find', words=words, limit=arguments.limit, offset=page(arguments),
+                         filters=chosen)
+        return with_related(found, chosen)
     if command == 'jobs' and arguments.text:
         return search(command, arguments.text, target='jobs', limit=arguments.limit, offset=page(arguments),
                       filters=filters(arguments, ('city', 'function')))
