@@ -99,7 +99,7 @@ except ImportError:  # Windows: no lock between processes.
     fcntl = None
 
 BASE = 'https://vnpidbfkvfytudqvsjfm.supabase.co'
-VERSION = '0.20.0'
+VERSION = '0.21.0'
 # The publishable key identifies the project. It is not a secret: with no account it reads nothing.
 KEY = 'sb_publishable_WY1XKEoEkXumGKcTTdrRag_SQtvl_AK'
 HOME = Path(os.environ.get('ANI_TALENT_HOME') or Path.home() / '.config' / 'ani-talent')
@@ -441,8 +441,10 @@ TOOLS = {
                'the band of the number of candidates that fit the filters (0, 1-9, 10-49, 50-199, 200-999, 1000+; '
                'some accounts get count too); the text and the words do not change it. count_by gives groups: '
                'the bands of that pool by one part, the largest first — use it to see what the library has, '
-               'with or with no other filter. related_directions: directions near a group that the group does '
-               'not count; search them apart.',
+               'with or with no other filter. With no known_only, pool_size also counts the candidates with '
+               'no value for a filter, and pool_note says so: search with known_only true for the number that fit. '
+               'related_directions: directions near a group that the group does not count; search them apart. '
+               'labels gives the name of each code in the result.',
                {'text': {'type': 'string', 'maxLength': 400}, 'terms': {'type': 'array', 'items': {'type': 'string'},
                                                                          'maxItems': 16},
                 'city': CODE, 'function': CODE, 'direction': DIRECTION, 'industry': INDUSTRY,
@@ -639,6 +641,52 @@ def with_related(result, chosen):
     if not related:
         return result
     return {**result, 'related_directions': [{'code': item, 'label': label.get(item)} for item in related]}
+
+
+CODE_FORM = re.compile(r'(%s)\.[a-z0-9_]+' % '|'.join(TAG_KINDS))
+
+
+def codes_in(value, found):
+    """The strings in a result that have the form of a tag code, in the order of their first
+    place. A code beside its own `label` (a group of count_by) is not added."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key == 'code' and 'label' in value:
+                continue
+            codes_in(item, found)
+    elif isinstance(value, list):
+        for item in value:
+            codes_in(item, found)
+    elif isinstance(value, str) and value not in found and CODE_FORM.fullmatch(value):
+        found.append(value)
+    return found
+
+
+def with_labels(result):
+    """The result and `labels`: the name of each tag code in it, so that an Agent can read the
+    codes without a call to `tags`. With no dictionary the result does not change."""
+    found = codes_in(result, []) if isinstance(result, dict) else []
+    if not found:  # No request for the dictionary.
+        return result
+    try:
+        labels = {tag['code']: tag['label'] for tag in dictionary() if tag.get('label')}
+    except (Failure, OSError):
+        return result
+    named = {code: labels[code] for code in found if code in labels}
+    return {**result, 'labels': named} if named else result
+
+
+def with_pool_note(result, arguments):
+    """`pool_size` counts a candidate with no value for a filter (no city, for example) unless
+    known_only is set. Say so in the result, with the filters that can do it."""
+    if not isinstance(result, dict) or 'pool_size' not in result or getattr(arguments, 'known_only', None):
+        return result
+    open_filters = [name for name in OPEN_FILTERS if getattr(arguments, name, None) is not None]
+    if not open_filters:
+        return result
+    return {**result, 'pool_note': 'pool_size also counts the candidates with no value for '
+            + ', '.join(open_filters) + ' (they are not known to fit). For the number that fit, '
+            'search again with known_only true; give both numbers in an answer.'}
 
 
 def access():
@@ -970,8 +1018,22 @@ ONE = {'candidate': 'candidate', 'text': 'text', 'contacts': 'contacts', 'histor
        'employers': 'employers', 'job': 'job'}
 
 
+# Commands with tag codes in the result: the result also gets `labels`.
+LABELED = ('search', 'jobs', 'job', 'match-job', 'match-candidate', 'candidate', 'candidates')
+# Filters that keep a candidate with no value for them, unless known_only. Not direction and
+# industry: each published candidate has a judgement of them.
+OPEN_FILTERS = ('city', 'function', 'min_degree', 'min_months')
+
+
 def main(argv=None):
     arguments = parser().parse_args(argv)
+    result = run(arguments)
+    if arguments.command == 'search':
+        result = with_pool_note(result, arguments)
+    return with_labels(result) if arguments.command in LABELED else result
+
+
+def run(arguments):
     command = arguments.command
     if command == 'version':
         return {'version': VERSION}
