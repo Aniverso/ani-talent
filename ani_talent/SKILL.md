@@ -40,6 +40,8 @@ This part and the next ones show the commands of your account only when you read
 | Task | Read, in this order |
 | --- | --- |
 | Find people by a description | `search` with one sentence and some words, then `candidates` with the resume text for the persons that you select |
+| Find people of a field (量子, 具身智能, 芯片) | `search --direction NAME`, with a sentence or words for the order; also the `related_directions` of the result, each in its own search |
+| Know what the library has, or how many people fit | `search --count-by direction_group` (or `direction`, `industry`, `city`, `function`, `degree`), with or with no other filter: `groups` and `pool_size` |
 | Find people for a job of the library | `job`, then `match-job` and `search`, then `candidates` with the resume text |
 | Find people for a job text that a person gave | `match-job` with the text, `search`, then `candidates` with the resume text |
 | Find jobs for a person | `match-candidate` (an ID, or the resume text), then `job` for each good result |
@@ -65,7 +67,7 @@ This part and the next ones show the commands of your account only when you read
 | Contact values | `contacts ID` |
 | Revisions of a candidate | `history ID` |
 | The original resume file (PDF or Word), saved as `<Ani ID>.pdf` | `file ID [--out DIR]` |
-| Candidates by meaning, words and filters | `search [--text "TEXT"] [WORD...] [--city CITY] [--function FUNCTION] [--min-degree DEGREE] [--min-months N] [--received-from DAY] [--received-to DAY]` |
+| Candidates by meaning, words and filters | `search [--text "TEXT"] [WORD...] [--city CITY] [--function FUNCTION] [--direction DIRECTION] [--industry INDUSTRY] [--count-by PART] [--min-degree DEGREE] [--min-months N] [--received-from DAY] [--received-to DAY]` |
 | Jobs, newest first or by a part of the title | `jobs [--query TEXT] [--limit N]` |
 | Jobs by meaning | `jobs --text "TEXT"` |
 | One job | `job ID` |
@@ -73,7 +75,7 @@ This part and the next ones show the commands of your account only when you read
 | Candidates for a job that is not in the database | `match-job (--text TEXT \| --file PATH) [...]` |
 | Jobs for a candidate | `match-candidate CANDIDATE_ID [--limit N]` |
 | Jobs for a person who is not in the database | `match-candidate (--text TEXT \| --file PATH) [...]` |
-| The cities and functions for a filter | `tags [--kind city]` |
+| The cities, functions, directions and industries for a filter | `tags [--kind city\|function\|direction_group\|direction\|industry]` |
 | One company record: internal notes, hiring preference, public facts, a sample of the opinions, jobs | `company ID` |
 | All public opinions of a company (posts, articles, comments) | `company ID --part opinions [--platform xiaohongshu\|weibo\|wechat] [--kind post\|article\|comment] [--text WORD] [--from DAY] [--to DAY] [--limit N] [--before N]` |
 | Companies by name | `companies TEXT [--limit N]` |
@@ -121,6 +123,30 @@ sentences, then read the persons that you select: a list read and a detail read 
 daily limits. The text of `--text` goes to the embedding service of the database; do not put a
 name or a contact value in it.
 
+`--direction` and `--industry` are for a question about a field. A model read each resume and
+gave the person codes of a fixed table: the technical directions of the work that the person
+did (three at most; a person in a role that is not technical has none) and the industries of
+the employers (two at most). A word search for 量子 finds each resume that names the word,
+also a salesperson of a quantum company; `--direction 量子` finds the people who did quantum
+work, and `--industry 量子科技` the people who worked at such a company. A direction is a group
+(量子, 具身智能, 大模型) or one direction of a group (量子计算硬件); a group finds the people of all
+its directions. Each result has `technical`, `direction_codes` (the directions and their
+groups) and `industry_codes`. Do not use the place of a code in the list: a person "has" a
+direction or not. For a group, the result can have `related_directions`: directions of other
+groups that are near it and that it does not count (量子 has 量子体系的数值模拟, people who study
+quantum systems on a classical computer). Search them apart, and name them apart in an answer.
+
+With a filter, the result has `pool_size`: the band of the number of candidates that fit the
+filters (`0`, `1-9`, `10-49`, `50-199`, `200-999`, `1000+`). Some accounts get `count` too.
+The text and the words change the order, not the pool. Use it to know if the list is all the
+people or a small part: with `1000+`, add a filter. `--count-by PART` adds `groups`: the bands
+of the pool by one part (`direction_group`, `direction`, `industry`, `city`, `function`,
+`degree`), the largest first, 80 at most, and `groups_without_code` (`unknown`: not judged or
+no value; `none`: judged, with no code of this part). A person with two codes is in two
+groups, so the groups do not add up to the pool. `search --count-by direction_group` with no
+other filter shows what the library has. Give a band as a band ("50 to 199 people"), not as a
+number.
+
 `--received-from DAY` and `--received-to DAY` (`YYYY-MM-DD`, China time, both days included)
 keep only candidates with a resume that came into the library in those days, for example the
 resumes of one weekend. One of the two alone is permitted, and the two dates alone are a
@@ -131,8 +157,14 @@ Do not try to add up counts.
 
 <!-- for: tags -->
 `--city` and `--function` take the name of a city or a function (`--city 北京`, `--function 后端`)
-or its code (`city.beijing`). You do not have to read `tags` first: as MCP tools, the filters
+or its code (`city.beijing`). `--direction` and `--industry` take a name, an alias or a code
+(`--direction 量子信息` and `--direction 量子计算` give the group 量子; `--industry 大厂` gives
+互联网平台). You do not have to read `tags` first: as MCP tools, the filters
 list their names, and a value that is not in the dictionary gives a failure that lists the names.
+`tags --kind direction` lists each direction with its group (`parent`), what it is
+(`definition`), what it is not (`excludes`) and its aliases: read it when a word of the person
+can be two directions. A word that is no direction or industry of the table (区块链) is not a
+filter: put it in the search text.
 The library has a fixed list of cities and functions. A city that is not in the list is not a
 filter: put it in the search text. A filter keeps a result that has no value for it and lists
 that filter in `unknown` (for example `["city"]`); add `--known-only` to remove those. A result
@@ -222,8 +254,9 @@ the best open jobs. It is for calls: a person tells the people about the jobs. `
 many people you can claim now (`claimable`) and how many more you can claim: `cap_left` (claims
 with no result) and `daily_left` (today). `pool-claim` gives the newest people first; for each:
 `claim_id`, `name`, `phones`, `intro` (one line), `expires_at` and `jobs` (at most 3, best
-first). A job has `verdict` (0 to 3) and `reason` when a model judged the pair; a job with no
-verdict is a match by meaning only. Give `--assignee` the name of the colleague who calls them.
+first). A model judged each person against each job: `pool` and `pool-claim` count and give only
+the people with a job worth a call, and only those jobs (`verdict` 1 to 3, with `reason`). Give
+`--assignee` the name of the colleague who calls them.
 
 A claimed person is yours for 24 hours: no other account gets the person. Claim only the people
 that will get a call now. Each phone of a claim is a recorded read.
