@@ -45,6 +45,7 @@ This part and the next ones show the commands of your account only when you read
 | Find people for a job of the library | `job`, then `match-job` and `search`, then `candidates` with the resume text |
 | Find people for a job text that a person gave | `match-job` with the text, `search`, then `candidates` with the resume text |
 | Find jobs for a person | `match-candidate` (an ID, or the resume text), then `job` for each good result |
+| Find the open jobs of a field, or know how many open jobs a field has | `jobs --direction NAME` (or `--industry`, `--city`, `--function`) gives the jobs and `count`; `jobs --count-by direction_group` gives the number of open jobs of each group |
 | Know what the company of a job wants in a person | `job` gives `company_brief` with the hiring preference; `company` gives the full record |
 | Know a company before a call or a recommendation | `company`: one call gives the internal notes, the public facts and a sample of the opinions. `coverage` says what the record has |
 | Know what people say about a company | `company` with the part `opinions` |
@@ -69,11 +70,12 @@ This part and the next ones show the commands of your account only when you read
 | The original resume file (PDF or Word), saved as `<Ani ID>.pdf` | `file ID [--out DIR]` |
 | Candidates by meaning, words and filters | `search [--text "TEXT"] [WORD...] [--city CITY] [--function FUNCTION] [--direction DIRECTION] [--industry INDUSTRY] [--count-by PART] [--min-degree DEGREE] [--min-months N] [--received-from DAY] [--received-to DAY]` |
 | Jobs, newest first or by a part of the title | `jobs [--query TEXT] [--limit N]` |
-| Jobs by meaning | `jobs --text "TEXT"` |
+| Jobs by meaning | `jobs --text "TEXT" [--city CITY] [--function FUNCTION] [--direction DIRECTION] [--industry INDUSTRY]` |
+| Open jobs by field, with the exact count | `jobs [--direction DIRECTION] [--industry INDUSTRY] [--city CITY] [--function FUNCTION] [--count-by PART]` |
 | One job | `job ID` |
-| Candidates for a job | `match-job JOB_ID [--limit N] [--city CITY] [--function FUNCTION]` |
+| Candidates for a job | `match-job JOB_ID [--limit N] [--city CITY] [--function FUNCTION] [--direction DIRECTION] [--industry INDUSTRY]` |
 | Candidates for a job that is not in the database | `match-job (--text TEXT \| --file PATH) [...]` |
-| Jobs for a candidate | `match-candidate CANDIDATE_ID [--limit N]` |
+| Jobs for a candidate | `match-candidate CANDIDATE_ID [--limit N] [--direction DIRECTION] [--industry INDUSTRY]` |
 | Jobs for a person who is not in the database | `match-candidate (--text TEXT \| --file PATH) [...]` |
 | The cities, functions, directions and industries for a filter | `tags [--kind city\|function\|direction_group\|direction\|industry]` |
 | One company record: internal notes, hiring preference, public facts, a sample of the opinions, jobs | `company ID` |
@@ -95,8 +97,11 @@ the Ani ID when you tell a person about a candidate.
 `candidate` gives the career of a person: each experience with its `description`, the education
 rows, `passages` (the text, `skills`, `domains` and `skill_months` of each employment and
 project), `index` (city and function codes, degree, months of employment) and `derived` (the
-education and the city that a later pass found in the resume text). `candidates` gives the
-`candidate` result of at most 50 persons in one call, and `resume_text` for each with `--text`.
+education and the city that a later pass found in the resume text). Use `index` for the degree,
+the months and the city: the source fields `highest_degree`, `experience_months` and
+`current_city` often have no value, and the result leaves them out when they are empty.
+`candidates` gives the `candidate` result of at most 50 persons in one call (with `index`, without
+`derived`), and `resume_text` for each with `--text`.
 `missing` lists the IDs that gave no record (absent, or not readable for your account).
 `text ID` gives the resume text of one person, at most 16,000 characters. Contact values in a
 resume text are masked: `████` is a telephone number, an email address, a URL, a long number or
@@ -114,7 +119,7 @@ another person or service unless the task needs it.
 
 <!-- for: search -->
 `search` gives a list of summaries (title, company, degree, months, city and function
-codes), with no name. `--text` is one sentence that says which person you look for; the
+codes), with no name field. A passage is resume text and can contain the name. `--text` is one sentence that says which person you look for; the
 search is by meaning. Words find a candidate whose resume has one of them (a skill, a
 company, a title, a school); give 16 words at most (`words_ignored` counts the others). The
 exact name of a person is a word too: that candidate comes first, with `name_match` true. Use
@@ -186,9 +191,26 @@ daily list limit, so read more pages only when the first ones are good.
 A job has a code such as `AniJ48203715`. The codes are not in sequence. An `ID` of a job can be
 the code or the UUID.
 
+The open jobs have the direction and industry codes of the same table as the candidates: the
+work of the job and the business of the company that hires (a job that is not technical has no
+direction). `jobs` with a filter and no `--text` lists the open jobs that fit, newest change
+first, with `count`: the exact number (jobs are not personal data, so it is not a band).
+`--count-by PART` (`direction_group`, `direction`, `industry`, `city`, `function`) adds `groups`,
+the largest first.
+
+<!-- for: jobs search -->
+`jobs --count-by` and `search --count-by` together show where the library has few people for
+many jobs (for example the open jobs and the people of 量子).
+<!-- for: all -->
+
 <!-- for: match-job -->
 `match-job` uses meaning; it gives a list to examine, not a decision. Read the `passages` and
 the `signals` of each result before you recommend a person.
+
+With a job ID, `job` and each candidate have `direction_codes` and `industry_codes`.
+`--direction` (often the direction of the job) keeps the candidates of that field; it does not
+change the order. A candidate that has no judgement of the field stays and has the filter in
+`unknown`; `--known-only` removes it. The filters work with an ID, not with `--text`.
 
 A job does not have to be in the database for a match. When the user gives a job description
 that the database does not have, do not stop: give its text to `match-job --text`, or the path
@@ -214,6 +236,8 @@ A person does not have to be in the database: give the full resume text to
 values (telephone, email, URL, handle) before the text goes to the embedding service, and it
 does not keep the text. A name stays in the text, so remove it when you can.
 `match-candidate --text` gives the `passage` of the resume that matched each job.
+With an ID, the person and each job have `direction_codes` and `industry_codes`, and
+`--direction` or `--industry` keeps the jobs of that field.
 
 <!-- for: company -->
 A company has a code such as `AniC59310427`; an `ID` of a company can be the code or the UUID.
@@ -299,7 +323,9 @@ The tools have the names of the commands, with the same account and limits. The 
 gives this text, with the parts for the commands of the account. The server lists only the
 tools that the account can use, and its start text names only those tools. Before a sign-in it
 lists `login`, `verify`, `status` and `guide`. A client reads the list at its start: start the
-client again after a sign-in or a change of the account.
+client again after a sign-in, a change of the account or an upgrade. After an upgrade, each tool
+result of the old server starts with a `notice` that says this. An argument that a tool does not
+have gives `invalid_arguments` with `unknown` and the list of the `arguments` of the tool.
 
 Most tools only read the database. Each tool has MCP annotations: a client such as Claude Code
 asks before a tool that is not read-only (`login`, `verify`, a tool that saves a file on this
