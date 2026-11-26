@@ -85,6 +85,7 @@ import base64
 import contextlib
 import hashlib
 import http.client
+import io
 import json
 import os
 from pathlib import Path
@@ -99,7 +100,7 @@ except ImportError:  # Windows: no lock between processes.
     fcntl = None
 
 BASE = 'https://vnpidbfkvfytudqvsjfm.supabase.co'
-VERSION = '0.21.0'
+VERSION = '0.22.0'
 # The publishable key identifies the project. It is not a secret: with no account it reads nothing.
 KEY = 'sb_publishable_WY1XKEoEkXumGKcTTdrRag_SQtvl_AK'
 HOME = Path(os.environ.get('ANI_TALENT_HOME') or Path.home() / '.config' / 'ani-talent')
@@ -302,6 +303,9 @@ def match_text(arguments):
     contact values before the embedding call; the text is not stored."""
     if sum(bool(item) for item in (arguments.id, arguments.text, arguments.file)) != 1:
         raise Failure('invalid_arguments', hint='Give one of: an ID, --text or --file.')
+    if getattr(arguments, 'direction', None) or getattr(arguments, 'industry', None):
+        raise Failure('invalid_arguments', hint='--direction and --industry work with an ID of the library, '
+                      'not with --text or --file.')
     text = arguments.text
     if arguments.file:
         try:
@@ -349,6 +353,7 @@ def save_file(arguments):
 SEARCH_FILTERS = ('city', 'function', 'direction', 'industry', 'count_by', 'min_degree', 'min_months',
                   'include_unknown', 'received_from', 'received_to')
 COUNT_BY = ('direction_group', 'direction', 'industry', 'city', 'function', 'degree')
+JOB_COUNT_BY = ('direction_group', 'direction', 'industry', 'city', 'function')
 
 
 def filters(arguments, names):
@@ -411,8 +416,9 @@ TOOLS = {
     'candidates': ('Read many candidates', 'The record of at most 50 candidates in one call, in the order of the '
                    'list. Use it for the persons that you selected from a search or a match, to give them an '
                    'order. Set text true to get `resume_text` for each: the resume text with contact values '
-                   'masked. Each candidate counts as one detail read for your limits. `missing` lists the IDs '
-                   'that gave no record.',
+                   'masked. `index` of each has the degree, the months and the city and function codes: use '
+                   'it, not the source fields. Each candidate counts as one detail read for your limits. '
+                   '`missing` lists the IDs that gave no record.',
                    {'ids': {'type': 'array', 'items': ID, 'minItems': 1, 'maxItems': 50}, 'text': {'type': 'boolean'}},
                    ['ids'], ['ids'], ['text']),
     'text': ('Read a resume text', 'The resume text of one candidate, at most 16,000 characters, with contact '
@@ -426,7 +432,7 @@ TOOLS = {
              {'id': ID, 'out': {'type': 'string', 'description': 'Folder. Default: the current folder.'}},
              ['id'], ['id'], ['out']),
     'search': ('Search candidates', 'Candidates by meaning, words and filters, best first: a list of summaries '
-               'with no name. text: one sentence that says which person you look for (search by meaning). terms: '
+               'with no name field (a passage is resume text and can contain the name). text: one sentence that says which person you look for (search by meaning). terms: '
                'words, a candidate whose resume has one of them is a hit (skill, company, title, school); 16 '
                'words at most, words_ignored counts the others. The exact name of a person is a term too: that '
                'candidate comes first with name_match true. Use text and terms together for the best order. A '
@@ -455,10 +461,15 @@ TOOLS = {
                ['text', 'city', 'function', 'direction', 'industry', 'count-by', 'min-degree', 'min-months',
                 'known-only', 'received-from', 'received-to', 'limit', 'offset']),
     'jobs': ('List or search jobs', 'Jobs. With text: by meaning, best first (offset = next gives the next page). '
-             'With query or nothing: newest first.',
+             'With a filter and no text: the open jobs that fit, newest change first, with count (the exact '
+             'number); count_by adds groups (the number of open jobs of each direction group, direction, '
+             'industry, city or function): use it for "how many quantum jobs" or to see the open jobs by field. '
+             'With query or nothing: newest first. Each job has direction_codes and industry_codes; labels '
+             'gives their names.',
              {'text': {'type': 'string', 'maxLength': 400}, 'query': {'type': 'string'}, 'city': CODE,
-              'function': CODE, 'limit': LIMIT, 'offset': OFFSET}, [], [],
-             ['text', 'query', 'city', 'function', 'limit', 'offset']),
+              'function': CODE, 'direction': DIRECTION, 'industry': INDUSTRY,
+              'count_by': {'type': 'string', 'enum': list(JOB_COUNT_BY)}, 'limit': LIMIT, 'offset': OFFSET}, [], [],
+             ['text', 'query', 'city', 'function', 'direction', 'industry', 'count-by', 'limit', 'offset']),
     'job': ('Read one job', 'One job, with its job code. `company_brief` is its company in a few lines: the '
             'code, a short overview, `hiring_preference` (what this company wants in a person: read it before '
             'you select candidates) and the number of public facts and opinions. Read the tool company with '
@@ -467,17 +478,25 @@ TOOLS = {
     'match-job': ('Candidates for a job', 'The candidates for one job, by meaning, best first. A list to examine, '
                   'not a decision. Give id for a job of the library, or text (or file) for a job that is not in '
                   'it: the title, the duties and the requirements of the job. A filter keeps a candidate with no '
-                  'value for it (listed in unknown); known_only removes them. offset = next gives the next page.',
+                  'value for it (listed in unknown); known_only removes them. offset = next gives the next page. '
+                  'With an id, the job and each candidate have direction_codes and industry_codes, and direction '
+                  'or industry keeps the candidates of that field (for example the direction of the job).',
                   {'id': JOB, 'text': MATCH_TEXT, 'file': MATCH_FILE, 'limit': LIMIT, 'city': CODE,
-                   'function': CODE, 'min_months': {'type': 'integer', 'minimum': 0}, 'known_only': KNOWN_ONLY,
+                   'function': CODE, 'direction': DIRECTION, 'industry': INDUSTRY,
+                   'min_months': {'type': 'integer', 'minimum': 0}, 'known_only': KNOWN_ONLY,
                    'offset': OFFSET}, [], ['id'],
-                  ['text', 'file', 'limit', 'city', 'function', 'min-months', 'known-only', 'offset']),
+                  ['text', 'file', 'limit', 'city', 'function', 'direction', 'industry', 'min-months',
+                   'known-only', 'offset']),
     'match-candidate': ('Jobs for a candidate', 'The jobs for one candidate, by meaning, best first. Give id for '
                         'a candidate of the library, or text (or file) for a resume that is not in it: the full '
-                        'resume text. offset = next gives the next page.',
+                        'resume text. offset = next gives the next page. With an id, the candidate and each job '
+                        'have direction_codes and industry_codes, and direction or industry keeps the jobs of '
+                        'that field.',
                         {'id': ID, 'text': MATCH_TEXT, 'file': MATCH_FILE, 'limit': LIMIT, 'city': CODE,
-                         'function': CODE, 'known_only': KNOWN_ONLY, 'offset': OFFSET}, [], ['id'],
-                        ['text', 'file', 'limit', 'city', 'function', 'known-only', 'offset']),
+                         'function': CODE, 'direction': DIRECTION, 'industry': INDUSTRY, 'known_only': KNOWN_ONLY,
+                         'offset': OFFSET}, [], ['id'],
+                        ['text', 'file', 'limit', 'city', 'function', 'direction', 'industry', 'known-only',
+                         'offset']),
     'tags': ('Tag table', 'The codes of the library: city, function, direction_group, direction and industry. '
              'A direction has its group (parent), a definition, what it does not include (excludes) and aliases; '
              'a group can have related directions of other groups.',
@@ -715,12 +734,32 @@ BLOCK = re.compile(r'<!-- for: ([a-z -]+) -->')
 NAMED = re.compile(r'`([a-z-]+)(?=[ `])')
 
 
-def guide_source():
-    """SKILL.md next to this tool: the full text, for each command."""
+def read_guide():
     try:
         return (Path(__file__).parent / 'SKILL.md').read_text()
     except OSError:
-        raise Failure('guide_not_found', hint='Read SKILL.md next to this tool.') from None
+        return None
+
+
+# The guide of this version, read when the process starts. An upgrade replaces SKILL.md while an
+# MCP server of the old version runs: the guide must stay that of the tools of the process.
+GUIDE = read_guide()
+
+
+def guide_source():
+    """SKILL.md next to this tool: the full text, for each command."""
+    if GUIDE is None:
+        raise Failure('guide_not_found', hint='Read SKILL.md next to this tool.')
+    return GUIDE
+
+
+def installed_version():
+    """The version of the file on the disk. It is not VERSION after an upgrade while this process runs."""
+    try:
+        found = re.search(r"^VERSION = '([^']+)'", Path(__file__).read_text(), re.M)
+    except OSError:
+        return VERSION
+    return found.group(1) if found else VERSION
 
 
 def account_guide(text, mine):
@@ -824,8 +863,12 @@ def tool_call(name, given):
     if name not in TOOLS or not isinstance(given, dict):
         return json.dumps({'error': 'not_available', 'hint': NOT_AVAILABLE}), True
     _, _, properties, required, positional, options = TOOLS[name]
-    if any(key not in given for key in required) or any(key not in properties for key in given):
-        return json.dumps({'error': 'invalid_arguments'}), True
+    unknown = [key for key in given if key not in properties]
+    absent = [key for key in required if key not in given]
+    if unknown or absent:
+        return json.dumps({'error': 'invalid_arguments', **({'unknown': unknown} if unknown else {}),
+                           **({'required': absent} if absent else {}),
+                           'arguments': list(properties)}, ensure_ascii=False), True
     argv = [name]
     for key in positional:
         value = given.get(key, [])
@@ -841,12 +884,17 @@ def tool_call(name, given):
                 argv += ['--' + option, str(item)]
         elif value is not None and value is not False:
             argv += ['--' + option + '=' + str(value)]
+    refused = io.StringIO()
     try:
-        return json.dumps(main(argv), ensure_ascii=False), False
+        with contextlib.redirect_stderr(refused):
+            return json.dumps(main(argv), ensure_ascii=False), False
     except Failure as failure:
         return json.dumps(failure.report, ensure_ascii=False), True
-    except SystemExit:  # The argument parser refused a value.
-        return json.dumps({'error': 'invalid_arguments'}), True
+    except SystemExit:  # The argument parser refused a value: its last line says which.
+        lines = [line for line in refused.getvalue().splitlines() if line.strip()]
+        hint = lines[-1].split(' error: ', 1)[-1] if lines else None
+        return json.dumps({'error': 'invalid_arguments', **({'hint': hint} if hint else {})},
+                          ensure_ascii=False), True
     except Exception as error:  # The server must stay up: the Agent loses all tools when it stops.
         return json.dumps({'error': 'client_failed', 'kind': type(error).__name__}), True
 
@@ -899,6 +947,10 @@ def answer(method, parameters):
         result = {'tools': tool_list(access())}
     elif method == 'tools/call':
         text, failed = tool_call(parameters.get('name'), parameters.get('arguments') or {})
+        installed = installed_version()
+        if installed != VERSION:
+            text = json.dumps({'notice': f'ani-talent {installed} is installed, but this tool server is still '
+                               f'{VERSION}. Tell the person to restart the Agent to get the new tools.'}) + '\n' + text
         result = {'content': [{'type': 'text', 'text': text}], 'isError': failed}
     else:
         result, error = None, {'code': -32601, 'message': 'Method not found'}
@@ -969,6 +1021,9 @@ def parser():
     command.add_argument('--text')
     command.add_argument('--city')
     command.add_argument('--function')
+    command.add_argument('--direction')
+    command.add_argument('--industry')
+    command.add_argument('--count-by', dest='count_by', choices=JOB_COUNT_BY)
     command.add_argument('--limit', type=int, default=20)
     command.add_argument('--offset', type=int)
     command.add_argument('--cursor', type=json.loads)
@@ -980,6 +1035,8 @@ def parser():
         command.add_argument('--limit', type=int, default=20)
         command.add_argument('--city')
         command.add_argument('--function')
+        command.add_argument('--direction')
+        command.add_argument('--industry')
         command.add_argument('--known-only', dest='known_only', action='store_true', default=None)
         command.add_argument('--offset', type=int)
         if name == 'match-job':
@@ -1025,9 +1082,44 @@ LABELED = ('search', 'jobs', 'job', 'match-job', 'match-candidate', 'candidate',
 OPEN_FILTERS = ('city', 'function', 'min_degree', 'min_months')
 
 
+# Fields of a job that are for the import and not for a reader.
+JOB_IMPORT_FIELDS = ('source', 'source_key', 'source_extra', 'source_created_at', 'source_updated_at')
+# Source values of a candidate that `index` gives better: the source often has no value.
+INDEXED = ('highest_degree', 'experience_months', 'current_city')
+
+
+def compact_job(job):
+    if not isinstance(job, dict):
+        return job
+    job = {key: value for key, value in job.items() if key not in JOB_IMPORT_FIELDS}
+    if isinstance(job.get('participant_names'), list):  # Often tens of names: the number is enough.
+        job['participant_count'] = len(job.pop('participant_names'))
+    return job
+
+
+def compact_candidate(person):
+    if not isinstance(person, dict) or not isinstance(person.get('index'), dict):
+        return person
+    return {key: value for key, value in person.items() if not (key in INDEXED and value is None)}
+
+
+def compact(command, result):
+    if not isinstance(result, dict):
+        return result
+    if command == 'job':
+        return compact_job(result)
+    if command == 'jobs' and isinstance(result.get('jobs'), list):
+        return {**result, 'jobs': [compact_job(job) for job in result['jobs']]}
+    if command == 'candidate':
+        return compact_candidate(result)
+    if command == 'candidates' and isinstance(result.get('candidates'), list):
+        return {**result, 'candidates': [compact_candidate(person) for person in result['candidates']]}
+    return result
+
+
 def main(argv=None):
     arguments = parser().parse_args(argv)
-    result = run(arguments)
+    result = compact(arguments.command, run(arguments))
     if arguments.command == 'search':
         result = with_pool_note(result, arguments)
     return with_labels(result) if arguments.command in LABELED else result
@@ -1101,8 +1193,16 @@ def run(arguments):
                          filters=chosen)
         return with_related(found, chosen)
     if command == 'jobs' and arguments.text:
+        if arguments.count_by:
+            raise Failure('invalid_arguments', hint='--count-by works with no --text.')
         return search(command, arguments.text, target='jobs', limit=arguments.limit, offset=page(arguments),
-                      filters=filters(arguments, ('city', 'function')))
+                      filters=filters(arguments, ('city', 'function', 'direction', 'industry')))
+    if command == 'jobs' and any(getattr(arguments, name) for name in
+                                 ('city', 'function', 'direction', 'industry', 'count_by')):
+        if arguments.query:
+            raise Failure('invalid_arguments', hint='Give --query or a filter, not both.')
+        return call(command, 'job_find', limit=arguments.limit, offset=page(arguments),
+                    filters=filters(arguments, ('city', 'function', 'direction', 'industry', 'count_by')))
     if command == 'jobs':
         return call(command, 'jobs', query=arguments.query, limit=arguments.limit, cursor=arguments.cursor)
     if command in ('match-job', 'match-candidate'):
@@ -1110,7 +1210,7 @@ def run(arguments):
             return match_text(arguments)
         if not arguments.id:
             raise Failure('invalid_arguments', hint='Give an ID, or --text or --file for a text that is not in the library.')
-        keys = ('city', 'function', 'min_months') if command == 'match-job' else ('city', 'function')
+        keys = ('city', 'function', 'direction', 'industry') + (('min_months',) if command == 'match-job' else ())
         return call(command, 'match_job' if command == 'match-job' else 'match_candidate', id=arguments.id.strip(),
                     limit=arguments.limit, offset=page(arguments), filters=filters(arguments, keys))
     if command == 'tags':
