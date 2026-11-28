@@ -268,6 +268,27 @@ does not keep the text. A name stays in the text, so remove it when you can.
 With an ID, the person and each job have `direction_codes` and `industry_codes`, and
 `--direction` or `--industry` keeps the jobs of that field.
 
+To judge the jobs for a person, read each job (`job ID`) and give it the same five tiers. Most jobs
+of a list are `no`: recommend few, and only with a reason.
+
+1. The job's hard conditions first: the necessary conditions of the job, its profile and
+   `company_brief` (degree and school level, age, years, a level such as 2-2 or P7, budget) and the
+   things the client does not want. One not met is `no`. Check that the dates of the education
+   agree with the degree that the resume states.
+2. The exact work must match, not only the function name: Agent development is not Agent
+   evaluation, engineering is not algorithm research, an HRBP is not a recruiter, a recruiter of
+   one industry is not a technical recruiter. A job whose core work the person has not done is
+   `no`; a near profile with the main skills can be `try`.
+3. The level must fit, in both directions: fewer years or a lower level than the job asks is `no`,
+   and so is a much more senior person for a hands-on job.
+4. When the job or the client asks for strong people, read the quality of the career: known
+   companies, demanding work, a clear line of growth. Average companies with simple work, many
+   short jobs or an old technology stack are `no` for such a job.
+5. When the work covers the job and the level fits, `fit` or `ok`. One open point (city, pay, a
+   recent job change, a portfolio to see) makes it `risk`: name it.
+6. For each recommended job, one sentence that the consultant can say to the person. The internal
+   notes, the hiring preference and the fee stay internal.
+
 <!-- for: company -->
 A company has a code such as `AniC59310427`; an `ID` of a company can be the code or the UUID.
 A company record has three layers. Read `coverage` first: it says which layers have data. An

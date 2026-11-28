@@ -100,7 +100,7 @@ except ImportError:  # Windows: no lock between processes.
     fcntl = None
 
 BASE = 'https://vnpidbfkvfytudqvsjfm.supabase.co'
-VERSION = '0.23.0'
+VERSION = '0.24.0'
 # The publishable key identifies the project. It is not a secret: with no account it reads nothing.
 KEY = 'sb_publishable_WY1XKEoEkXumGKcTTdrRag_SQtvl_AK'
 HOME = Path(os.environ.get('ANI_TALENT_HOME') or Path.home() / '.config' / 'ani-talent')
