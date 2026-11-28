@@ -229,6 +229,35 @@ To give the candidates of a job an order:
 5. Compare each person with the requirements of the job, and give the order with a reason for
    each. The database gives data; the order is your work.
 
+To judge a person for a job, give one tier: `fit` (recommend now), `ok` (good, with one or two
+average points), `risk` (the work matches, but one point must be checked first: name it), `try`
+(one condition is not met, but there is a clear reason to try: name both), `no`.
+
+1. Hard conditions first. Read the job, its profile and `company_brief` line by line: the
+   conditions that they mark as necessary and the things that the client does not want (a degree
+   or school level, an age, years, a budget, an excluded employer or direction). A person who
+   does not meet one is `no`, unless your team has a rule for an exception. With an exception,
+   say which condition is not met and how the consultant can present the person.
+2. The function must be the same. A person whose main work is a different function is `no`, also
+   when the resume has many words of the job: an algorithm researcher is not an Agent engineer, a
+   product manager is not a developer, a general HR is not a technical recruiter.
+3. The level must fit, in both directions. Much more senior than the job (a director, a CTO or
+   a team head for an engineer job; pay far above the budget) is `no`: do not move such a person
+   to `risk`. An intern or a student with no real experience is `no` too.
+4. Read a title together with the company. A director or head of a small or unknown company is
+   not the level of the same title in a large company. Judge by the size and difficulty of the
+   work that the resume shows, not by the title.
+5. Work done, not words. A resume that lists many fields and tools with no clear main line, or
+   with no result and detail of the person's own work, is `risk` at best. A title that differs
+   from the job is not a reason for `no` when the work covers the job.
+6. City and industry are `risk` or `try`, not `no`: a person in another city, or from a near
+   industry, can be worth a call. A far industry, when the job asks for industry experience, is `no`.
+7. A near profile is `try`: a full-stack engineer for a front-end job, or a person below the
+   years of the job who grew fast.
+8. Unknown is not negative. When the resume does not say a thing, write that it is unknown.
+
+Give the result by tier, with one sentence for each person. Use the Ani ID.
+
 <!-- for: match-candidate -->
 `match-candidate` gives the jobs for one person, by meaning: a list to examine, not a decision.
 A person does not have to be in the database: give the full resume text to
